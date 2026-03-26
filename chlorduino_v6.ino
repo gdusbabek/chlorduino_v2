@@ -109,6 +109,7 @@ struct PersistentSettings {
   uint16_t runDurationMinutes = 10;
   uint32_t restartCount = 0;
   uint32_t crashCount = 0;
+  uint32_t lastDoseEpochUtc = 0;
 };
 
 struct Config {
@@ -223,6 +224,7 @@ void updateRestartCounters();
 void initializeWatchdog();
 void restartController();
 bool isMenuScreen(ScreenId screen);
+void formatLastDoseText(char *buffer, size_t size, const char *prefix);
 void startPumpRunMinutes(uint16_t minutes, unsigned long nowMs);
 void stopPumpRun();
 bool performRunup();
@@ -689,6 +691,8 @@ void applyPumpOutput(unsigned long nowMs) {
     pump.enabled = false;
     pump.accumulatedTodayMs += (nowMs - pump.startedAtMs);
     digitalWrite(Pins::PUMP_GATE, LOW);
+    settings.lastDoseEpochUtc = static_cast<uint32_t>(now());
+    savePersistentSettings();
     if (pump.keepDisplayOn) {
       noteUserActivity(nowMs);
       pump.keepDisplayOn = false;
@@ -954,6 +958,9 @@ void processSerialCommand(const char *command) {
 }
 
 void printState() {
+  char lastDose[24];
+  formatLastDoseText(lastDose, sizeof(lastDose), "");
+
   Serial.print(F("Mode="));
   Serial.print(modeName(systemMode));
   Serial.print(F(" Restart="));
@@ -966,6 +973,8 @@ void printState() {
   Serial.print(settings.restartCount);
   Serial.print(F(" Crashes="));
   Serial.print(settings.crashCount);
+  Serial.print(F(" LastDose="));
+  Serial.print(lastDose);
   Serial.print(F(" Temp="));
   if (sensors.tempValid) {
     Serial.print(static_cast<int>(roundf(sensors.waterTempF)));
@@ -985,13 +994,17 @@ void loadPersistentSettings() {
   const bool uninitialized = settings.magic != SETTINGS_MAGIC;
   const bool invalidUtcOffset = settings.utcOffsetHours < -12 || settings.utcOffsetHours > 12;
   const bool invalidRunDuration = settings.runDurationMinutes > 30U;
+  const bool invalidLastDose = settings.lastDoseEpochUtc > 4102444800UL;
 
-  if (uninitialized || invalidUtcOffset || invalidRunDuration) {
+  if (uninitialized || invalidUtcOffset || invalidRunDuration || invalidLastDose) {
     settings.magic = SETTINGS_MAGIC;
     settings.utcOffsetHours = -5;
     settings.runDurationMinutes = 10;
-    settings.restartCount = 0;
-    settings.crashCount = 0;
+    if (uninitialized) {
+      settings.restartCount = 0;
+      settings.crashCount = 0;
+    }
+    settings.lastDoseEpochUtc = 0;
     savePersistentSettings();
     startupLogLine("Settings: defaults");
     return;
@@ -1040,6 +1053,27 @@ bool isMenuScreen(ScreenId screen) {
          screen == SCREEN_EDIT_UTC ||
          screen == SCREEN_EDIT_MANUAL ||
          screen == SCREEN_SYSTEM;
+}
+
+void formatLastDoseText(char *buffer, size_t size, const char *prefix) {
+  if (settings.lastDoseEpochUtc == 0) {
+    snprintf(buffer, size, "%sNEVER", prefix);
+    return;
+  }
+
+  const time_t localDoseTime =
+    static_cast<time_t>(settings.lastDoseEpochUtc) + (static_cast<long>(settings.utcOffsetHours) * SECS_PER_HOUR);
+
+  snprintf(
+    buffer,
+    size,
+    "%s%02d %s %02d:%02d",
+    prefix,
+    day(localDoseTime),
+    monthShortStr(month(localDoseTime)),
+    hour(localDoseTime),
+    minute(localDoseTime)
+  );
 }
 
 void startPumpRunMinutes(uint16_t minutes, unsigned long nowMs) {
@@ -1227,6 +1261,8 @@ void initializeStartup() {
   startupLogLine(line);
   snprintf(line, sizeof(line), "Crashes: %lu", static_cast<unsigned long>(settings.crashCount));
   startupLogLine(line);
+  formatLastDoseText(line, sizeof(line), "Dose: ");
+  startupLogLine(line);
 
   Serial.begin(115200);
   startup.serialAttached = attachDebugSerial(SERIAL_ATTACH_TIMEOUT_MS);
@@ -1248,6 +1284,8 @@ bool attachDebugSerial(unsigned long timeoutMs) {
 }
 
 void printStartupBanner() {
+  char line[32];
+
   if (!Serial) {
     return;
   }
@@ -1260,6 +1298,8 @@ void printStartupBanner() {
   Serial.println(startup.rawResetCause, HEX);
   Serial.print(F("Debug serial attached: "));
   Serial.println(startup.serialAttached ? F("yes") : F("no"));
+  formatLastDoseText(line, sizeof(line), "Last dose: ");
+  Serial.println(line);
   Serial.println(F("GPS on Serial1 at 9600 baud."));
 }
 
@@ -1642,19 +1682,22 @@ void renderSystemScreen() {
   oled.clearBuffer();
   oled.setFont(u8g2_font_6x10_tr);
 
-  oled.drawStr(0, 10, "System");
+  oled.drawStr(0, 8, "System");
 
   snprintf(line, sizeof(line), "Boots: %lu", static_cast<unsigned long>(settings.restartCount));
-  oled.drawStr(0, 21, line);
+  oled.drawStr(0, 18, line);
 
   snprintf(line, sizeof(line), "Crashes: %lu", static_cast<unsigned long>(settings.crashCount));
-  oled.drawStr(0, 32, line);
+  oled.drawStr(0, 28, line);
 
   snprintf(line, sizeof(line), "Reset: %s", restartReasonText(startup.restartReason));
-  oled.drawStr(0, 43, line);
+  oled.drawStr(0, 38, line);
+
+  formatLastDoseText(line, sizeof(line), "Dose: ");
+  oled.drawStr(0, 48, line);
 
   snprintf(line, sizeof(line), "GPS:%s WDT:%ds", sensors.gpsHasFix ? "yes" : "no", watchdogTimeoutMs / 1000);
-  oled.drawStr(0, 54, line);
+  oled.drawStr(0, 58, line);
 
   oled.sendBuffer();
 }
