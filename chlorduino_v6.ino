@@ -187,14 +187,15 @@ unsigned long lastGpsPollMs = 0;
 unsigned long lastSafetyCheckMs = 0;
 int watchdogTimeoutMs = 0;
 
-constexpr uint8_t MENU_ITEM_COUNT = 6;
+constexpr uint8_t MENU_ITEM_COUNT = 7;
 const char *const MENU_ITEMS[MENU_ITEM_COUNT] = {
   "duration",
   "utc",
   "manual",
   "system",
   "runup",
-  "restart"
+  "restart",
+  "back"
 };
 
 float readBatteryVoltage();
@@ -578,6 +579,9 @@ void runControlLogic(unsigned long nowMs) {
           return;
         case 5:
           restartController();
+          return;
+        case 6:
+          ui.screen = SCREEN_IDLE;
           return;
       }
     }
