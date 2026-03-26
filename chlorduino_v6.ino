@@ -473,13 +473,14 @@ void updateNextSunset() {
   const time_t utc = now();
   const double utcHour = static_cast<double>(hour(utc));
   const double utcMins = static_cast<double>(minute(utc));
+  const double utcSecs = static_cast<double>(second(utc));
 
   double transit = 0.0;
   double sunrise = 0.0;
   double sunset = 0.0;
   calcSunriseSunset(utc, gps.location.lat(), gps.location.lng(), transit, sunrise, sunset);
 
-  double sunsetIn = sunset - utcHour - (utcMins / 60.0);
+  double sunsetIn = sunset - utcHour - (utcMins / 60.0) - (utcSecs / 3600.0);
   while (sunsetIn > 24.001) {
     sunsetIn -= 24.0;
   }
