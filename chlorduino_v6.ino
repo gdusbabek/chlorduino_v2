@@ -78,6 +78,7 @@ struct PumpState {
   bool enabled = false;
   bool commandedOn = false;
   bool keepDisplayOn = false;
+  bool usbHeartbeatLed = false;
   unsigned long startedAtMs = 0;
   unsigned long targetRunMs = 0;
   unsigned long accumulatedTodayMs = 0;
@@ -213,6 +214,7 @@ void runControlLogic(unsigned long nowMs);
 void applyPumpOutput(unsigned long nowMs);
 void runSafetyChecks(unsigned long nowMs);
 void updateDisplayPower(unsigned long nowMs);
+void updateStatusLed(unsigned long nowMs);
 void handleSerialCommands();
 void processSerialCommand(const char *command);
 void printState();
@@ -270,8 +272,14 @@ void setup() {
   pinMode(Pins::BUTTON_DOWN, INPUT_PULLUP);
   pinMode(Pins::BUTTON_SELECT, INPUT_PULLUP);
   pinMode(Pins::PUMP_GATE, OUTPUT);
+#ifdef LED_BUILTIN
+  pinMode(LED_BUILTIN, OUTPUT);
+#endif
 
   digitalWrite(Pins::PUMP_GATE, LOW);
+#ifdef LED_BUILTIN
+  digitalWrite(LED_BUILTIN, LOW);
+#endif
 
   debouncerUp.attach(Pins::BUTTON_UP, INPUT_PULLUP);
   debouncerDown.attach(Pins::BUTTON_DOWN, INPUT_PULLUP);
@@ -308,6 +316,7 @@ void loop() {
   runSafetyChecks(nowMs);
   runControlLogic(nowMs);
   applyPumpOutput(nowMs);
+  updateStatusLed(nowMs);
   updateDisplayPower(nowMs);
   updateUi();
   delay(10);
@@ -739,6 +748,21 @@ void updateDisplayPower(unsigned long nowMs) {
   }
 }
 
+void updateStatusLed(unsigned long nowMs) {
+#ifdef LED_BUILTIN
+  bool ledOn = false;
+
+  if (pump.enabled && pump.usbHeartbeatLed) {
+    const unsigned long phaseMs = nowMs % 1200UL;
+    ledOn = (phaseMs < 80UL) || (phaseMs >= 200UL && phaseMs < 280UL);
+  }
+
+  digitalWrite(LED_BUILTIN, ledOn ? HIGH : LOW);
+#else
+  (void)nowMs;
+#endif
+}
+
 void handleSerialCommands() {
   static char commandBuffer[32] = {};
   static uint8_t commandLength = 0;
@@ -1024,6 +1048,7 @@ void startPumpRunMinutes(uint16_t minutes, unsigned long nowMs) {
   pump.targetRunMs = static_cast<unsigned long>(minutes) * 60UL * 1000UL;
   pump.commandedOn = true;
   pump.keepDisplayOn = ui.displayOn;
+  pump.usbHeartbeatLed = !sensors.batteryValid;
   pump.startedAtMs = nowMs;
   setMode(MODE_DOSING);
 }
@@ -1032,6 +1057,7 @@ void stopPumpRun() {
   pump.commandedOn = false;
   pump.targetRunMs = 0;
   pump.keepDisplayOn = false;
+  pump.usbHeartbeatLed = false;
   ui.screen = SCREEN_IDLE;
   setMode(MODE_IDLE);
 }
