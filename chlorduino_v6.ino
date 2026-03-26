@@ -1457,6 +1457,8 @@ void renderStartupScreen(const char *statusLine) {
 void renderIdleScreen() {
   char line[24];
   const time_t localEpoch = localTimeNow();
+  const bool pumpRowPulseOn =
+    systemMode == MODE_DOSING && pump.enabled && ((millis() / 500UL) % 2UL) == 0UL;
 
   oled.clearBuffer();
   oled.setFont(u8g2_font_6x10_tr);
@@ -1525,6 +1527,11 @@ void renderIdleScreen() {
   }
   oled.drawStr(92, 32, line);
 
+  if (pumpRowPulseOn) {
+    oled.drawBox(0, 45, 128, 12);
+    oled.setDrawColor(0);
+  }
+
   oled.setFont(u8g2_font_open_iconic_all_1x_t);
   oled.drawGlyph(0, 54, 241);
   oled.setFont(u8g2_font_6x10_tr);
@@ -1541,6 +1548,10 @@ void renderIdleScreen() {
     snprintf(line, sizeof(line), "OFF");
   }
   oled.drawStr(12, 54, line);
+
+  if (pumpRowPulseOn) {
+    oled.setDrawColor(1);
+  }
 
   oled.sendBuffer();
 }
