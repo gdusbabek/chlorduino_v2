@@ -29,7 +29,6 @@
 enum SystemMode {
   MODE_BOOT,
   MODE_IDLE,
-  MODE_MANUAL,
   MODE_DOSING,
   MODE_LOW_BATTERY,
   MODE_FAULT
@@ -1151,8 +1150,6 @@ const __FlashStringHelper *modeName(SystemMode mode) {
       return F("BOOT");
     case MODE_IDLE:
       return F("IDLE");
-    case MODE_MANUAL:
-      return F("MANUAL");
     case MODE_DOSING:
       return F("DOSING");
     case MODE_LOW_BATTERY:
