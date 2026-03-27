@@ -88,6 +88,7 @@ struct UiState {
   ScreenId screen = SCREEN_IDLE;
   uint8_t menuIndex = 0;
   uint8_t menuScroll = 0;
+  uint8_t systemScroll = 0;
   bool displayOn = true;
   unsigned long lastActivityMs = 0;
   uint16_t editDurationMinutes = 10;
@@ -228,6 +229,7 @@ void initializeWatchdog();
 void restartController();
 bool isMenuScreen(ScreenId screen);
 void formatLastDoseText(char *buffer, size_t size, const char *prefix);
+void formatNextDoseText(char *buffer, size_t size, const char *prefix);
 void startPumpRunMinutes(uint16_t minutes, unsigned long nowMs);
 void stopPumpRun();
 bool performRunup();
@@ -675,6 +677,12 @@ void runControlLogic(unsigned long nowMs) {
   }
 
   if (ui.screen == SCREEN_SYSTEM) {
+    if (buttonEdge(buttonUp) && ui.systemScroll > 0) {
+      ui.systemScroll--;
+    }
+    if (buttonEdge(buttonDown) && ui.systemScroll < 1) {
+      ui.systemScroll++;
+    }
     if (buttonShortRelease(buttonSelect, nowMs) || buttonLongEdge(buttonSelect)) {
       ui.screen = SCREEN_MENU;
     }
@@ -1082,6 +1090,27 @@ void formatLastDoseText(char *buffer, size_t size, const char *prefix) {
 
   const time_t localDoseTime =
     static_cast<time_t>(settings.lastDoseEpochUtc) + (static_cast<long>(settings.utcOffsetHours) * SECS_PER_HOUR);
+
+  snprintf(
+    buffer,
+    size,
+    "%s%02d %s %02d:%02d",
+    prefix,
+    day(localDoseTime),
+    monthShortStr(month(localDoseTime)),
+    hour(localDoseTime),
+    minute(localDoseTime)
+  );
+}
+
+void formatNextDoseText(char *buffer, size_t size, const char *prefix) {
+  if (settings.nextDoseEpochUtc == 0) {
+    snprintf(buffer, size, "%sUNKNOWN", prefix);
+    return;
+  }
+
+  const time_t localDoseTime =
+    static_cast<time_t>(settings.nextDoseEpochUtc) + (static_cast<long>(settings.utcOffsetHours) * SECS_PER_HOUR);
 
   snprintf(
     buffer,
@@ -1732,26 +1761,29 @@ void renderManualScreen() {
 }
 
 void renderSystemScreen() {
-  char line[24];
+  char lines[6][24];
   oled.clearBuffer();
   oled.setFont(u8g2_font_6x10_tr);
 
   oled.drawStr(0, 8, "System");
 
-  snprintf(line, sizeof(line), "Boots: %lu", static_cast<unsigned long>(settings.restartCount));
-  oled.drawStr(0, 18, line);
+  snprintf(lines[0], sizeof(lines[0]), "Boots: %lu", static_cast<unsigned long>(settings.restartCount));
+  snprintf(lines[1], sizeof(lines[1]), "Crashes: %lu", static_cast<unsigned long>(settings.crashCount));
+  snprintf(lines[2], sizeof(lines[2]), "Reset: %s", restartReasonText(startup.restartReason));
+  formatLastDoseText(lines[3], sizeof(lines[3]), "Dose: ");
+  formatNextDoseText(lines[4], sizeof(lines[4]), "Next: ");
+  snprintf(lines[5], sizeof(lines[5]), "GPS:%s WDT:%ds", sensors.gpsHasFix ? "yes" : "no", watchdogTimeoutMs / 1000);
 
-  snprintf(line, sizeof(line), "Crashes: %lu", static_cast<unsigned long>(settings.crashCount));
-  oled.drawStr(0, 28, line);
+  const uint8_t visibleRows = 5;
+  for (uint8_t row = 0; row < visibleRows; ++row) {
+    const uint8_t lineIndex = ui.systemScroll + row;
+    if (lineIndex >= 6) {
+      break;
+    }
 
-  snprintf(line, sizeof(line), "Reset: %s", restartReasonText(startup.restartReason));
-  oled.drawStr(0, 38, line);
-
-  formatLastDoseText(line, sizeof(line), "Dose: ");
-  oled.drawStr(0, 48, line);
-
-  snprintf(line, sizeof(line), "GPS:%s WDT:%ds", sensors.gpsHasFix ? "yes" : "no", watchdogTimeoutMs / 1000);
-  oled.drawStr(0, 58, line);
+    const uint8_t y = static_cast<uint8_t>(18 + (row * 10));
+    oled.drawStr(0, y, lines[lineIndex]);
+  }
 
   oled.sendBuffer();
 }
@@ -1854,6 +1886,7 @@ void openManualEditor() {
 }
 
 void openSystemScreen() {
+  ui.systemScroll = 0;
   ui.screen = SCREEN_SYSTEM;
   if (ui.displayOn) {
     renderSystemScreen();
