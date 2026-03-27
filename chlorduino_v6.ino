@@ -67,6 +67,7 @@ struct SensorState {
   float batteryVolts = NAN;
   float nextSunsetHours = -1.0f;
   float nextPumpRunHours = -1.0f;
+  uint32_t nextDoseEpochUtc = 0;
   bool gpsHasFix = false;
   bool tempValid = false;
   bool batteryValid = false;
@@ -110,6 +111,7 @@ struct PersistentSettings {
   uint32_t restartCount = 0;
   uint32_t crashCount = 0;
   uint32_t lastDoseEpochUtc = 0;
+  uint32_t nextDoseEpochUtc = 0;
 };
 
 struct Config {
@@ -146,7 +148,6 @@ constexpr unsigned long MENU_TIMEOUT_MS = 30000;
 constexpr unsigned long SHORT_PRESS_MAX_MS = 2000;
 constexpr unsigned long TEMP_STARTUP_RETRY_MS = 1000;
 constexpr unsigned long GPS_MANUAL_TIME_HOLDOFF_MS = 2UL * 60UL * 60UL * 1000UL;
-constexpr float PUMP_SCHEDULE_TRIGGER_HOURS = 30.0f / 3600.0f;
 constexpr long RUNUP_TARGET_LEAD_SECONDS = 45L;
 constexpr long RUNUP_MIN_LEAD_SECONDS = 35L;
 constexpr uint8_t STARTUP_LOG_LINES = 6;
@@ -209,6 +210,8 @@ void updateGps(unsigned long nowMs);
 bool sampleTemperatureNow();
 void consumeGpsData();
 void updateNextSunset();
+time_t midnightUtcFor(time_t utc);
+time_t sunsetEpochUtcForDate(time_t dateUtc);
 void updateUi();
 void runControlLogic(unsigned long nowMs);
 void applyPumpOutput(unsigned long nowMs);
@@ -464,31 +467,43 @@ void consumeGpsData() {
 }
 
 void updateNextSunset() {
-  if (!sensors.gpsHasFix || !gps.location.isValid() || timeStatus() == timeNotSet) {
+  if (timeStatus() == timeNotSet) {
     sensors.nextSunsetHours = -1.0f;
     sensors.nextPumpRunHours = -1.0f;
+    sensors.nextDoseEpochUtc = 0;
     return;
   }
 
-  const time_t utc = now();
-  const double utcHour = static_cast<double>(hour(utc));
-  const double utcMins = static_cast<double>(minute(utc));
-  const double utcSecs = static_cast<double>(second(utc));
+  const time_t utcNow = now();
 
-  double transit = 0.0;
-  double sunrise = 0.0;
-  double sunset = 0.0;
-  calcSunriseSunset(utc, gps.location.lat(), gps.location.lng(), transit, sunrise, sunset);
-
-  double sunsetIn = sunset - utcHour - (utcMins / 60.0) - (utcSecs / 3600.0);
-  while (sunsetIn > 24.001) {
-    sunsetIn -= 24.0;
+  if (!sensors.gpsHasFix || !gps.location.isValid()) {
+    sensors.nextSunsetHours = -1.0f;
+    sensors.nextDoseEpochUtc = settings.nextDoseEpochUtc;
+    if (sensors.nextDoseEpochUtc != 0 && static_cast<time_t>(sensors.nextDoseEpochUtc) >= utcNow) {
+      sensors.nextPumpRunHours = static_cast<float>(sensors.nextDoseEpochUtc - static_cast<uint32_t>(utcNow)) / 3600.0f;
+    } else {
+      sensors.nextPumpRunHours = -1.0f;
+    }
+    return;
   }
 
-  sensors.nextSunsetHours = static_cast<float>(sunsetIn);
-  sensors.nextPumpRunHours = sensors.nextSunsetHours - 1.0f;
-  while (sensors.nextPumpRunHours < 0.0f) {
-    sensors.nextPumpRunHours += 24.0f;
+  const time_t todaySunsetUtc = sunsetEpochUtcForDate(utcNow);
+  time_t scheduledSunsetUtc = todaySunsetUtc;
+  time_t nextDoseUtc = todaySunsetUtc - SECS_PER_HOUR;
+
+  if (utcNow >= nextDoseUtc) {
+    scheduledSunsetUtc = sunsetEpochUtcForDate(utcNow + SECS_PER_DAY);
+    nextDoseUtc = scheduledSunsetUtc - SECS_PER_HOUR;
+  }
+
+  sensors.nextSunsetHours = static_cast<float>(scheduledSunsetUtc - utcNow) / 3600.0f;
+  sensors.nextPumpRunHours = static_cast<float>(nextDoseUtc - utcNow) / 3600.0f;
+  sensors.nextDoseEpochUtc = static_cast<uint32_t>(nextDoseUtc);
+
+  if (settings.nextDoseEpochUtc != sensors.nextDoseEpochUtc &&
+      (settings.nextDoseEpochUtc == 0 || (settings.nextDoseEpochUtc / 60UL) != (sensors.nextDoseEpochUtc / 60UL))) {
+    settings.nextDoseEpochUtc = sensors.nextDoseEpochUtc;
+    savePersistentSettings();
   }
 }
 
@@ -545,9 +560,10 @@ void runControlLogic(unsigned long nowMs) {
 
   if (systemMode == MODE_IDLE &&
       settings.runDurationMinutes > 0 &&
-      sensors.nextPumpRunHours >= 0.0f &&
-      sensors.nextPumpRunHours <= PUMP_SCHEDULE_TRIGGER_HOURS) {
+      sensors.nextDoseEpochUtc != 0 &&
+      now() >= static_cast<time_t>(sensors.nextDoseEpochUtc)) {
     startPumpRunMinutes(settings.runDurationMinutes, nowMs);
+    updateNextSunset();
     Serial.println(F("Scheduled pump run started."));
     return;
   }
@@ -692,8 +708,6 @@ void applyPumpOutput(unsigned long nowMs) {
     pump.enabled = false;
     pump.accumulatedTodayMs += (nowMs - pump.startedAtMs);
     digitalWrite(Pins::PUMP_GATE, LOW);
-    settings.lastDoseEpochUtc = static_cast<uint32_t>(now());
-    savePersistentSettings();
     if (pump.keepDisplayOn) {
       noteUserActivity(nowMs);
       pump.keepDisplayOn = false;
@@ -976,6 +990,8 @@ void printState() {
   Serial.print(settings.crashCount);
   Serial.print(F(" LastDose="));
   Serial.print(lastDose);
+  Serial.print(F(" NextDoseUtc="));
+  Serial.print(settings.nextDoseEpochUtc);
   Serial.print(F(" Temp="));
   if (sensors.tempValid) {
     Serial.print(static_cast<int>(roundf(sensors.waterTempF)));
@@ -996,8 +1012,9 @@ void loadPersistentSettings() {
   const bool invalidUtcOffset = settings.utcOffsetHours < -12 || settings.utcOffsetHours > 12;
   const bool invalidRunDuration = settings.runDurationMinutes > 30U;
   const bool invalidLastDose = settings.lastDoseEpochUtc > 4102444800UL;
+  const bool invalidNextDose = settings.nextDoseEpochUtc > 4102444800UL;
 
-  if (uninitialized || invalidUtcOffset || invalidRunDuration || invalidLastDose) {
+  if (uninitialized || invalidUtcOffset || invalidRunDuration || invalidLastDose || invalidNextDose) {
     settings.magic = SETTINGS_MAGIC;
     settings.utcOffsetHours = -5;
     settings.runDurationMinutes = 10;
@@ -1006,6 +1023,7 @@ void loadPersistentSettings() {
       settings.crashCount = 0;
     }
     settings.lastDoseEpochUtc = 0;
+    settings.nextDoseEpochUtc = 0;
     savePersistentSettings();
     startupLogLine("Settings: defaults");
     return;
@@ -1077,6 +1095,28 @@ void formatLastDoseText(char *buffer, size_t size, const char *prefix) {
   );
 }
 
+time_t midnightUtcFor(time_t utc) {
+  return utc - (static_cast<long>(hour(utc)) * SECS_PER_HOUR) -
+         (static_cast<long>(minute(utc)) * SECS_PER_MIN) -
+         static_cast<long>(second(utc));
+}
+
+time_t sunsetEpochUtcForDate(time_t dateUtc) {
+  double transit = 0.0;
+  double sunrise = 0.0;
+  double sunset = 0.0;
+  calcSunriseSunset(dateUtc, gps.location.lat(), gps.location.lng(), transit, sunrise, sunset);
+
+  long sunsetSeconds = lround(sunset * 3600.0);
+  time_t sunsetEpochUtc = midnightUtcFor(dateUtc) + sunsetSeconds;
+
+  if (sunsetEpochUtc < midnightUtcFor(dateUtc)) {
+    sunsetEpochUtc += SECS_PER_DAY;
+  }
+
+  return sunsetEpochUtc;
+}
+
 void startPumpRunMinutes(uint16_t minutes, unsigned long nowMs) {
   ui.screen = SCREEN_IDLE;
   pump.targetRunMs = static_cast<unsigned long>(minutes) * 60UL * 1000UL;
@@ -1084,6 +1124,8 @@ void startPumpRunMinutes(uint16_t minutes, unsigned long nowMs) {
   pump.keepDisplayOn = ui.displayOn;
   pump.usbHeartbeatLed = !sensors.batteryValid;
   pump.startedAtMs = nowMs;
+  settings.lastDoseEpochUtc = static_cast<uint32_t>(now());
+  savePersistentSettings();
   setMode(MODE_DOSING);
 }
 
@@ -1097,11 +1139,15 @@ void stopPumpRun() {
 }
 
 bool performRunup() {
-  if (sensors.nextPumpRunHours < 0.0f) {
+  if (sensors.nextDoseEpochUtc == 0 || timeStatus() == timeNotSet) {
     return false;
   }
 
-  const long secondsUntilRun = lroundf(sensors.nextPumpRunHours * 3600.0f);
+  const long secondsUntilRun = static_cast<long>(static_cast<int64_t>(sensors.nextDoseEpochUtc) - static_cast<int64_t>(now()));
+  if (secondsUntilRun <= 0) {
+    return false;
+  }
+
   long secondsToAdvance = secondsUntilRun - RUNUP_TARGET_LEAD_SECONDS;
   if (secondsToAdvance < 0) {
     secondsToAdvance = 0;
@@ -1112,8 +1158,8 @@ bool performRunup() {
   updateNextSunset();
 
   long secondsRemaining = -1;
-  if (sensors.nextPumpRunHours >= 0.0f) {
-    secondsRemaining = lroundf(sensors.nextPumpRunHours * 3600.0f);
+  if (sensors.nextDoseEpochUtc != 0) {
+    secondsRemaining = static_cast<long>(static_cast<int64_t>(sensors.nextDoseEpochUtc) - static_cast<int64_t>(now()));
   }
 
   if (secondsRemaining >= 0 && secondsRemaining <= 30L) {
@@ -1121,7 +1167,9 @@ bool performRunup() {
     if (secondsToBackUp > 0) {
       adjustTime(-secondsToBackUp);
       updateNextSunset();
-      secondsRemaining = lroundf(sensors.nextPumpRunHours * 3600.0f);
+      if (sensors.nextDoseEpochUtc != 0) {
+        secondsRemaining = static_cast<long>(static_cast<int64_t>(sensors.nextDoseEpochUtc) - static_cast<int64_t>(now()));
+      }
     }
   }
 
