@@ -1425,9 +1425,11 @@ void waitForGpsStartupLock() {
 
   sensors.gpsHasFix = true;
   syncClockFromGps();
+  updateNextSunset();
   startupLogLine("GPS lock acquired");
 
   if (Serial) {
+    char nextDoseLine[32];
     Serial.print(F("GPS lock acquired after "));
     Serial.print(startup.gpsLockWaitMs);
     Serial.println(F(" ms."));
@@ -1462,10 +1464,14 @@ void waitForGpsStartupLock() {
       Serial.print(F("0"));
     }
     Serial.println(gps.time.second());
+    formatNextDoseText(nextDoseLine, sizeof(nextDoseLine), "Next dose: ");
+    Serial.println(nextDoseLine);
   }
 
   char line[STARTUP_LINE_CHARS + 1];
   snprintf(line, sizeof(line), "Lock in %lus", startup.gpsLockWaitMs / 1000UL);
+  startupLogLine(line);
+  formatNextDoseText(line, sizeof(line), "Next: ");
   startupLogLine(line);
 }
 
