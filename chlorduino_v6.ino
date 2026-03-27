@@ -1655,7 +1655,12 @@ void renderIdleScreen() {
     const unsigned long remainingSeconds = (remainingMs + 999UL) / 1000UL;
     snprintf(line, sizeof(line), "ON %lus", remainingSeconds);
   } else if (sensors.nextPumpRunHours >= 0.0f) {
-    snprintf(line, sizeof(line), "in %.1f hrs", sensors.nextPumpRunHours);
+    if (sensors.nextPumpRunHours <= 3.0f) {
+      const unsigned long remainingMinutes = static_cast<unsigned long>((sensors.nextPumpRunHours * 60.0f) + 0.5f);
+      snprintf(line, sizeof(line), "in %lum", remainingMinutes);
+    } else {
+      snprintf(line, sizeof(line), "in %.1f hrs", sensors.nextPumpRunHours);
+    }
   } else {
     snprintf(line, sizeof(line), "OFF");
   }
