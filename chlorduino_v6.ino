@@ -538,7 +538,18 @@ void refreshSchedule(bool persist) {
     return;
   }
 
-  const time_t nextDoseUtc = computeNextDoseEpochUtc(utcNow);
+  time_t nextDoseUtc = static_cast<time_t>(settings.nextDoseEpochUtc);
+  if (persist || nextDoseUtc == 0) {
+    nextDoseUtc = computeNextDoseEpochUtc(utcNow);
+  }
+
+  if (nextDoseUtc == 0) {
+    sensors.nextSunsetHours = -1.0f;
+    sensors.nextPumpRunHours = -1.0f;
+    sensors.nextDoseEpochUtc = 0;
+    return;
+  }
+
   const time_t scheduledSunsetUtc = nextDoseUtc + SECS_PER_HOUR;
   sensors.nextSunsetHours = static_cast<float>(scheduledSunsetUtc - utcNow) / 3600.0f;
   sensors.nextPumpRunHours = static_cast<float>(nextDoseUtc - utcNow) / 3600.0f;
