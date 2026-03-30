@@ -39,6 +39,7 @@ enum ScreenId {
   SCREEN_MENU,
   SCREEN_EDIT_DURATION,
   SCREEN_EDIT_UTC,
+  SCREEN_EDIT_VOFFSET,
   SCREEN_EDIT_MANUAL,
   SCREEN_SYSTEM,
   SCREEN_FAULT
@@ -93,6 +94,7 @@ struct UiState {
   unsigned long lastActivityMs = 0;
   uint16_t editDurationMinutes = 10;
   int8_t editUtcOffsetHours = -5;
+  int16_t editBatteryOffsetTenths = 12;
   uint16_t editManualMinutes = 0;
 };
 
@@ -109,6 +111,7 @@ struct PersistentSettings {
   uint32_t magic = 0;
   int8_t utcOffsetHours = -5;
   uint16_t runDurationMinutes = 10;
+  int16_t batteryOffsetTenths = 12;
   uint32_t restartCount = 0;
   uint32_t crashCount = 0;
   uint32_t lastDoseEpochUtc = 0;
@@ -190,10 +193,11 @@ unsigned long lastGpsPollMs = 0;
 unsigned long lastSafetyCheckMs = 0;
 int watchdogTimeoutMs = 0;
 
-constexpr uint8_t MENU_ITEM_COUNT = 7;
+constexpr uint8_t MENU_ITEM_COUNT = 8;
 const char *const MENU_ITEMS[MENU_ITEM_COUNT] = {
   "duration",
   "utc",
+  "voffset",
   "manual",
   "system",
   "runup",
@@ -255,6 +259,7 @@ void renderIdleScreen();
 void renderMenuScreen();
 void renderDurationScreen();
 void renderUtcScreen();
+void renderBatteryOffsetScreen();
 void renderManualScreen();
 void renderSystemScreen();
 void formatGpsSpinnerLine(char *buffer, size_t size, uint32_t spinnerTick);
@@ -269,6 +274,7 @@ void suppressGpsTimeSync();
 void openMenu();
 void openDurationEditor();
 void openUtcEditor();
+void openBatteryOffsetEditor();
 void openManualEditor();
 void openSystemScreen();
 bool buttonShortRelease(const ButtonState &button, unsigned long nowMs);
@@ -609,19 +615,22 @@ void runControlLogic(unsigned long nowMs) {
           openUtcEditor();
           return;
         case 2:
-          openManualEditor();
+          openBatteryOffsetEditor();
           return;
         case 3:
-          openSystemScreen();
+          openManualEditor();
           return;
         case 4:
+          openSystemScreen();
+          return;
+        case 5:
           performRunup();
           ui.screen = SCREEN_IDLE;
           return;
-        case 5:
+        case 6:
           restartController();
           return;
-        case 6:
+        case 7:
           ui.screen = SCREEN_IDLE;
           return;
       }
@@ -660,6 +669,24 @@ void runControlLogic(unsigned long nowMs) {
     }
     if (buttonShortRelease(buttonSelect, nowMs)) {
       settings.utcOffsetHours = ui.editUtcOffsetHours;
+      savePersistentSettings();
+      ui.screen = SCREEN_MENU;
+    }
+    if (buttonLongEdge(buttonSelect)) {
+      ui.screen = SCREEN_MENU;
+    }
+    return;
+  }
+
+  if (ui.screen == SCREEN_EDIT_VOFFSET) {
+    if (buttonEdge(buttonUp) && ui.editBatteryOffsetTenths < 50) {
+      ui.editBatteryOffsetTenths++;
+    }
+    if (buttonEdge(buttonDown) && ui.editBatteryOffsetTenths > -50) {
+      ui.editBatteryOffsetTenths--;
+    }
+    if (buttonShortRelease(buttonSelect, nowMs)) {
+      settings.batteryOffsetTenths = ui.editBatteryOffsetTenths;
       savePersistentSettings();
       ui.screen = SCREEN_MENU;
     }
@@ -753,6 +780,9 @@ void updateUi() {
       return;
     case SCREEN_EDIT_UTC:
       renderUtcScreen();
+      return;
+    case SCREEN_EDIT_VOFFSET:
+      renderBatteryOffsetScreen();
       return;
     case SCREEN_EDIT_MANUAL:
       renderManualScreen();
@@ -1033,13 +1063,15 @@ void loadPersistentSettings() {
   const bool uninitialized = settings.magic != SETTINGS_MAGIC;
   const bool invalidUtcOffset = settings.utcOffsetHours < -12 || settings.utcOffsetHours > 12;
   const bool invalidRunDuration = settings.runDurationMinutes > 30U;
+  const bool invalidBatteryOffset = settings.batteryOffsetTenths < -50 || settings.batteryOffsetTenths > 50;
   const bool invalidLastDose = settings.lastDoseEpochUtc > 4102444800UL;
   const bool invalidNextDose = settings.nextDoseEpochUtc > 4102444800UL;
 
-  if (uninitialized || invalidUtcOffset || invalidRunDuration || invalidLastDose || invalidNextDose) {
+  if (uninitialized || invalidUtcOffset || invalidRunDuration || invalidBatteryOffset || invalidLastDose || invalidNextDose) {
     settings.magic = SETTINGS_MAGIC;
     settings.utcOffsetHours = -5;
     settings.runDurationMinutes = 10;
+    settings.batteryOffsetTenths = 12;
     if (uninitialized) {
       settings.restartCount = 0;
       settings.crashCount = 0;
@@ -1092,6 +1124,7 @@ bool isMenuScreen(ScreenId screen) {
   return screen == SCREEN_MENU ||
          screen == SCREEN_EDIT_DURATION ||
          screen == SCREEN_EDIT_UTC ||
+         screen == SCREEN_EDIT_VOFFSET ||
          screen == SCREEN_EDIT_MANUAL ||
          screen == SCREEN_SYSTEM;
 }
@@ -1247,7 +1280,8 @@ float readBatteryVoltage() {
 
   const float adcMax = 4095.0f;
   const float measuredAtPin = (raw / adcMax) * config.adcReferenceVolts;
-  float rawVolts = (raw * 3300.0f) / 4095.0f / 1000.0f * config.batteryDividerRatio + 1.2f;
+  float rawVolts = (raw * 3300.0f) / 4095.0f / 1000.0f * config.batteryDividerRatio +
+                   (static_cast<float>(settings.batteryOffsetTenths) / 10.0f);
   float reportedMeasuredVolts = measuredAtPin * config.batteryDividerRatio;
   // Serial.printf("Volts %.1f, %.1f, %.1f\n", measuredVolts, reportedMeasuredVolts, config.adcReferenceVolts)
   return rawVolts;
@@ -1772,6 +1806,18 @@ void renderUtcScreen() {
   oled.sendBuffer();
 }
 
+void renderBatteryOffsetScreen() {
+  char line[24];
+  oled.clearBuffer();
+  oled.setFont(u8g2_font_6x10_tr);
+  oled.drawStr(0, 10, "Volt Offset");
+  snprintf(line, sizeof(line), "%+.1f V", static_cast<float>(ui.editBatteryOffsetTenths) / 10.0f);
+  oled.drawStr(0, 30, line);
+  oled.drawStr(0, 48, "Tap select to save");
+  oled.drawStr(0, 58, "Hold select back");
+  oled.sendBuffer();
+}
+
 void renderManualScreen() {
   char line[24];
   oled.clearBuffer();
@@ -1898,6 +1944,14 @@ void openUtcEditor() {
   ui.screen = SCREEN_EDIT_UTC;
   if (ui.displayOn) {
     renderUtcScreen();
+  }
+}
+
+void openBatteryOffsetEditor() {
+  ui.editBatteryOffsetTenths = settings.batteryOffsetTenths;
+  ui.screen = SCREEN_EDIT_VOFFSET;
+  if (ui.displayOn) {
+    renderBatteryOffsetScreen();
   }
 }
 
