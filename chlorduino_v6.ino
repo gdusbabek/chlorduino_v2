@@ -192,6 +192,9 @@ unsigned long lastTempReadMs = 0;
 unsigned long lastGpsPollMs = 0;
 unsigned long lastSafetyCheckMs = 0;
 int watchdogTimeoutMs = 0;
+float batteryHistory[10] = {};
+uint8_t batteryHistoryCount = 0;
+uint8_t batteryHistoryIndex = 0;
 
 constexpr uint8_t MENU_ITEM_COUNT = 8;
 const char *const MENU_ITEMS[MENU_ITEM_COUNT] = {
@@ -418,16 +421,35 @@ void updateBattery(unsigned long nowMs) {
   if (raw <= BATTERY_ADC_MIN_VALID_RAW) {
     sensors.batteryVolts = NAN;
     sensors.batteryValid = false;
+    batteryHistoryCount = 0;
+    batteryHistoryIndex = 0;
     return;
   }
 
-  sensors.batteryVolts = readBatteryVoltage();
-  if (sensors.batteryVolts < USB_POWER_MAX_VOLTS) {
+  const float measuredVolts = readBatteryVoltage();
+  if (measuredVolts < USB_POWER_MAX_VOLTS) {
     sensors.batteryVolts = NAN;
     sensors.batteryValid = false;
+    batteryHistoryCount = 0;
+    batteryHistoryIndex = 0;
     return;
   }
-  sensors.batteryValid = !isnan(sensors.batteryVolts);
+
+  batteryHistory[batteryHistoryIndex] = measuredVolts;
+  batteryHistoryIndex = (batteryHistoryIndex + 1) % 10;
+  if (batteryHistoryCount < 10) {
+    batteryHistoryCount++;
+  }
+
+  float maxVolts = batteryHistory[0];
+  for (uint8_t i = 1; i < batteryHistoryCount; ++i) {
+    if (batteryHistory[i] > maxVolts) {
+      maxVolts = batteryHistory[i];
+    }
+  }
+
+  sensors.batteryVolts = maxVolts;
+  sensors.batteryValid = true;
 }
 
 void updateTemperature(unsigned long nowMs) {
