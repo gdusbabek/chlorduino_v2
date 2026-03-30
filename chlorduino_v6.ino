@@ -565,7 +565,6 @@ void runControlLogic(unsigned long nowMs) {
       sensors.nextDoseEpochUtc != 0 &&
       now() >= static_cast<time_t>(sensors.nextDoseEpochUtc)) {
     startPumpRunMinutes(settings.runDurationMinutes, nowMs);
-    updateNextSunset();
     Serial.println(F("Scheduled pump run started."));
     return;
   }
@@ -1155,6 +1154,7 @@ void startPumpRunMinutes(uint16_t minutes, unsigned long nowMs) {
   pump.startedAtMs = nowMs;
   settings.lastDoseEpochUtc = static_cast<uint32_t>(now());
   savePersistentSettings();
+  updateNextSunset();
   setMode(MODE_DOSING);
 }
 
@@ -1691,7 +1691,10 @@ void renderIdleScreen() {
     snprintf(line, sizeof(line), "ON %lus", remainingSeconds);
   } else if (sensors.nextPumpRunHours >= 0.0f) {
     if (sensors.nextPumpRunHours <= 3.0f) {
-      const unsigned long remainingMinutes = static_cast<unsigned long>((sensors.nextPumpRunHours * 60.0f) + 0.5f);
+      unsigned long remainingMinutes = static_cast<unsigned long>(ceilf(sensors.nextPumpRunHours * 60.0f));
+      if (remainingMinutes == 0 && sensors.nextPumpRunHours > 0.0f) {
+        remainingMinutes = 1;
+      }
       snprintf(line, sizeof(line), "in %lum", remainingMinutes);
     } else {
       snprintf(line, sizeof(line), "in %.1f hrs", sensors.nextPumpRunHours);
