@@ -25,7 +25,6 @@
 #include <Bounce2.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
-#include <RotaryEncoder.h>
 
 enum SystemMode {
   MODE_BOOT,
@@ -58,12 +57,6 @@ struct ButtonState {
   bool longPressed = false;
   unsigned long lastChangeMs = 0;
   unsigned long pressedAtMs = 0;
-};
-
-struct EncoderState {
-  bool cw = false;
-  bool ccw = false;
-  unsigned long lastChangeMs = 0;
 };
 
 enum UiInputAction {
@@ -165,10 +158,6 @@ namespace Pins {
   constexpr uint8_t BUTTON_UP = 8;      // CLK
   constexpr uint8_t BUTTON_DOWN = 9;    // DT
   constexpr uint8_t BUTTON_SELECT = 10; // SW
-
-  constexpr uint8_t PIN_ENC_CLK = 8;
-  constexpr uint8_t PIN_ENC_DT  = 9;
-  constexpr uint8_t PIN_ENC_SW  = 10;
 }
 
 constexpr unsigned long BATTERY_INTERVAL_MS = 2000;
@@ -205,7 +194,6 @@ StartupState startup;
 ButtonState buttonUp;
 ButtonState buttonDown;
 ButtonState buttonSelect;
-EncoderState encoderState;
 InputEvents inputEvents;
 SystemMode systemMode = MODE_BOOT;
 
@@ -217,8 +205,6 @@ TinyGPSPlus gps;
 OneWire oneWireBus(Pins::ONE_WIRE);
 DallasTemperature waterTempSensor(&oneWireBus);
 U8G2_SH1106_128X64_NONAME_F_HW_I2C oled(U8G2_R0, U8X8_PIN_NONE);
-// Use latch mode suitable for common mechanical encoders like the KY-040
-RotaryEncoder encoder(Pins::PIN_ENC_CLK, Pins::PIN_ENC_DT, RotaryEncoder::LatchMode::FOUR3);
 
 char startupLog[STARTUP_LOG_LINES][STARTUP_LINE_CHARS + 1] = {};
 uint8_t startupLogCount = 0;
@@ -233,7 +219,6 @@ int watchdogTimeoutMs = 0;
 float batteryHistory[10] = {};
 uint8_t batteryHistoryCount = 0;
 uint8_t batteryHistoryIndex = 0;
-long lastEncoderPosition = 0;
 
 constexpr uint8_t MENU_ITEM_COUNT = 9;
 const char *const MENU_ITEMS[MENU_ITEM_COUNT] = {
@@ -379,7 +364,6 @@ void loop() {
 
   handleSerialCommands();
   readRawButtons(nowMs);
-  readEncoder(nowMs);
   collectInputEvents(nowMs);
   updateSensors(nowMs);
   runSafetyChecks(nowMs);
@@ -399,46 +383,12 @@ void readRawButtons(unsigned long nowMs) {
   updateButton(buttonSelect, debouncerSelect, "select", nowMs);
 }
 
-void readEncoder(unsigned long nowMs) {
-  // if (currentInputMode() == INPUT_MODE_ENCODER) {
-    encoder.tick();
-    long newPosition = encoder.getPosition();
-    if (newPosition == lastEncoderPosition) {
-      // Serial.print(newPosition);
-    } else if (newPosition > lastEncoderPosition) {
-      // cw
-      Serial.println("CW");
-      encoderState.ccw = false;
-      encoderState.cw = true;
-      encoderState.lastChangeMs = nowMs;
-    } else {
-      // ccw
-      Serial.println("CCW");
-      encoderState.ccw = true;
-      encoderState.cw = false;
-      encoderState.lastChangeMs = nowMs;
-    }
-    lastEncoderPosition = newPosition;
-  // }
-}
-
 void collectInputEvents(unsigned long nowMs) {
   inputEvents = {};
-  bool downEdge = false;
-  bool upEdge = false;
-  bool downRelease = false;
-  bool upRelease = false;
-
-  if (currentInputMode() == INPUT_MODE_BUTTONS) {
-    upEdge = buttonEdge(buttonUp);
-    downEdge = buttonEdge(buttonDown);
-    upRelease = buttonShortRelease(buttonUp, nowMs);
-    downRelease = buttonShortRelease(buttonDown, nowMs);
-    
-  } else if (currentInputMode() == INPUT_MODE_ENCODER) {
-    upEdge = encoderState.ccw;
-    downEdge = encoderState.cw;
-  }
+  const bool downEdge = buttonEdge(buttonDown);
+  const bool upEdge = buttonEdge(buttonUp);;
+  const bool downRelease = buttonShortRelease(buttonDown, nowMs);
+  const bool upRelease = buttonShortRelease(buttonUp, nowMs);
   const bool selectShort = buttonShortRelease(buttonSelect, nowMs);
 
   if (selectShort) {
@@ -2318,10 +2268,7 @@ void resetInputState() {
   buttonUp = ButtonState{};
   buttonDown = ButtonState{};
   buttonSelect = ButtonState{};
-  encoderState = EncoderState{};
   inputEvents = InputEvents{};
-  encoder.setPosition(0);
-  lastEncoderPosition = 0;
   Serial.println("Reset input state");
 }
 
