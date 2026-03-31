@@ -1093,8 +1093,9 @@ void printState() {
   Serial.print(F("V Pump="));
   Serial.println(pump.enabled ? F("ON") : F("OFF"));
 
+  const unsigned long nowUtc = (timeStatus() == timeNotSet) ? 0UL : static_cast<unsigned long>(now());
   Serial.print(F("NowUtc="));
-  Serial.print(timeStatus() == timeNotSet ? 0 : now());
+  Serial.print(nowUtc);
   Serial.print(F(" StoredNextUtc="));
   Serial.print(settings.nextDoseEpochUtc);
   Serial.print(F(" LiveNextUtc="));
