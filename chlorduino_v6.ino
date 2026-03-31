@@ -90,6 +90,8 @@ struct UiState {
   uint8_t menuIndex = 0;
   uint8_t menuScroll = 0;
   uint8_t systemScroll = 0;
+  bool editSelectingAction = false;
+  uint8_t editActionIndex = 0;
   bool displayOn = true;
   unsigned long lastActivityMs = 0;
   uint16_t editDurationMinutes = 10;
@@ -610,8 +612,7 @@ void runControlLogic(unsigned long nowMs) {
 
   if (buttonEdge(buttonUp) || buttonEdge(buttonDown) || buttonEdge(buttonSelect) ||
       buttonShortRelease(buttonUp, nowMs) || buttonShortRelease(buttonDown, nowMs) ||
-      buttonShortRelease(buttonSelect, nowMs) ||
-      buttonLongEdge(buttonSelect)) {
+      buttonShortRelease(buttonSelect, nowMs)) {
     noteUserActivity(nowMs);
   }
 
@@ -624,7 +625,7 @@ void runControlLogic(unsigned long nowMs) {
     return;
   }
 
-  if (ui.screen == SCREEN_IDLE && systemMode != MODE_DOSING && buttonLongEdge(buttonSelect)) {
+  if (ui.screen == SCREEN_IDLE && systemMode != MODE_DOSING && buttonShortRelease(buttonSelect, nowMs)) {
     openMenu();
     return;
   }
@@ -671,82 +672,149 @@ void runControlLogic(unsigned long nowMs) {
           return;
       }
     }
-    if (buttonLongEdge(buttonSelect)) {
-      ui.screen = SCREEN_IDLE;
-      return;
-    }
     return;
   }
 
   if (ui.screen == SCREEN_EDIT_DURATION) {
-    if (buttonEdge(buttonUp) && ui.editDurationMinutes < 30) {
-      ui.editDurationMinutes++;
-    }
-    if (buttonEdge(buttonDown) && ui.editDurationMinutes > 0) {
-      ui.editDurationMinutes--;
-    }
-    if (buttonShortRelease(buttonSelect, nowMs)) {
-      settings.runDurationMinutes = ui.editDurationMinutes;
-      savePersistentSettings();
-      ui.screen = SCREEN_MENU;
-    }
-    if (buttonLongEdge(buttonSelect)) {
-      ui.screen = SCREEN_MENU;
+    if (!ui.editSelectingAction) {
+      if (buttonEdge(buttonUp) && ui.editDurationMinutes < 30) {
+        ui.editDurationMinutes++;
+      }
+      if (buttonEdge(buttonDown) && ui.editDurationMinutes > 0) {
+        ui.editDurationMinutes--;
+      }
+      if (buttonShortRelease(buttonSelect, nowMs)) {
+        ui.editSelectingAction = true;
+        ui.editActionIndex = 0;
+      }
+    } else {
+      if (buttonEdge(buttonUp)) {
+        if (ui.editActionIndex == 0) {
+          ui.editSelectingAction = false;
+        } else {
+          ui.editActionIndex--;
+        }
+      }
+      if (buttonEdge(buttonDown) && ui.editActionIndex < 1) {
+        ui.editActionIndex++;
+      }
+      if (buttonShortRelease(buttonSelect, nowMs)) {
+        if (ui.editActionIndex == 0) {
+          settings.runDurationMinutes = ui.editDurationMinutes;
+          savePersistentSettings();
+        }
+        ui.editSelectingAction = false;
+        ui.screen = SCREEN_MENU;
+      }
     }
     return;
   }
 
   if (ui.screen == SCREEN_EDIT_UTC) {
-    if (buttonEdge(buttonUp) && ui.editUtcOffsetHours < 12) {
-      ui.editUtcOffsetHours++;
-    }
-    if (buttonEdge(buttonDown) && ui.editUtcOffsetHours > -12) {
-      ui.editUtcOffsetHours--;
-    }
-    if (buttonShortRelease(buttonSelect, nowMs)) {
-      settings.utcOffsetHours = ui.editUtcOffsetHours;
-      savePersistentSettings();
-      ui.screen = SCREEN_MENU;
-    }
-    if (buttonLongEdge(buttonSelect)) {
-      ui.screen = SCREEN_MENU;
+    if (!ui.editSelectingAction) {
+      if (buttonEdge(buttonUp) && ui.editUtcOffsetHours < 12) {
+        ui.editUtcOffsetHours++;
+      }
+      if (buttonEdge(buttonDown) && ui.editUtcOffsetHours > -12) {
+        ui.editUtcOffsetHours--;
+      }
+      if (buttonShortRelease(buttonSelect, nowMs)) {
+        ui.editSelectingAction = true;
+        ui.editActionIndex = 0;
+      }
+    } else {
+      if (buttonEdge(buttonUp)) {
+        if (ui.editActionIndex == 0) {
+          ui.editSelectingAction = false;
+        } else {
+          ui.editActionIndex--;
+        }
+      }
+      if (buttonEdge(buttonDown) && ui.editActionIndex < 1) {
+        ui.editActionIndex++;
+      }
+      if (buttonShortRelease(buttonSelect, nowMs)) {
+        if (ui.editActionIndex == 0) {
+          settings.utcOffsetHours = ui.editUtcOffsetHours;
+          savePersistentSettings();
+        }
+        ui.editSelectingAction = false;
+        ui.screen = SCREEN_MENU;
+      }
     }
     return;
   }
 
   if (ui.screen == SCREEN_EDIT_VOFFSET) {
-    if (buttonEdge(buttonUp) && ui.editBatteryOffsetTenths < 50) {
-      ui.editBatteryOffsetTenths++;
-    }
-    if (buttonEdge(buttonDown) && ui.editBatteryOffsetTenths > -50) {
-      ui.editBatteryOffsetTenths--;
-    }
-    if (buttonShortRelease(buttonSelect, nowMs)) {
-      settings.batteryOffsetTenths = ui.editBatteryOffsetTenths;
-      savePersistentSettings();
-      ui.screen = SCREEN_MENU;
-    }
-    if (buttonLongEdge(buttonSelect)) {
-      ui.screen = SCREEN_MENU;
+    if (!ui.editSelectingAction) {
+      if (buttonEdge(buttonUp) && ui.editBatteryOffsetTenths < 50) {
+        ui.editBatteryOffsetTenths++;
+      }
+      if (buttonEdge(buttonDown) && ui.editBatteryOffsetTenths > -50) {
+        ui.editBatteryOffsetTenths--;
+      }
+      if (buttonShortRelease(buttonSelect, nowMs)) {
+        ui.editSelectingAction = true;
+        ui.editActionIndex = 0;
+      }
+    } else {
+      if (buttonEdge(buttonUp)) {
+        if (ui.editActionIndex == 0) {
+          ui.editSelectingAction = false;
+        } else {
+          ui.editActionIndex--;
+        }
+      }
+      if (buttonEdge(buttonDown) && ui.editActionIndex < 1) {
+        ui.editActionIndex++;
+      }
+      if (buttonShortRelease(buttonSelect, nowMs)) {
+        if (ui.editActionIndex == 0) {
+          settings.batteryOffsetTenths = ui.editBatteryOffsetTenths;
+          savePersistentSettings();
+        }
+        ui.editSelectingAction = false;
+        ui.screen = SCREEN_MENU;
+      }
     }
     return;
   }
 
   if (ui.screen == SCREEN_EDIT_MANUAL) {
-    if (buttonEdge(buttonUp) && ui.editManualMinutes < 30) {
-      ui.editManualMinutes++;
-    }
-    if (buttonEdge(buttonDown) && ui.editManualMinutes > 0) {
-      ui.editManualMinutes--;
-    }
-    if (buttonShortRelease(buttonSelect, nowMs)) {
-      ui.screen = SCREEN_IDLE;
-      if (ui.editManualMinutes > 0) {
-        startPumpRunMinutes(ui.editManualMinutes, nowMs);
+    if (!ui.editSelectingAction) {
+      if (buttonEdge(buttonUp) && ui.editManualMinutes < 30) {
+        ui.editManualMinutes++;
       }
-    }
-    if (buttonLongEdge(buttonSelect)) {
-      ui.screen = SCREEN_MENU;
+      if (buttonEdge(buttonDown) && ui.editManualMinutes > 0) {
+        ui.editManualMinutes--;
+      }
+      if (buttonShortRelease(buttonSelect, nowMs)) {
+        ui.editSelectingAction = true;
+        ui.editActionIndex = 0;
+      }
+    } else {
+      if (buttonEdge(buttonUp)) {
+        if (ui.editActionIndex == 0) {
+          ui.editSelectingAction = false;
+        } else {
+          ui.editActionIndex--;
+        }
+      }
+      if (buttonEdge(buttonDown) && ui.editActionIndex < 1) {
+        ui.editActionIndex++;
+      }
+      if (buttonShortRelease(buttonSelect, nowMs)) {
+        if (ui.editActionIndex == 0) {
+          ui.editSelectingAction = false;
+          ui.screen = SCREEN_IDLE;
+          if (ui.editManualMinutes > 0) {
+            startPumpRunMinutes(ui.editManualMinutes, nowMs);
+          }
+        } else {
+          ui.editSelectingAction = false;
+          ui.screen = SCREEN_MENU;
+        }
+      }
     }
     return;
   }
@@ -758,7 +826,7 @@ void runControlLogic(unsigned long nowMs) {
     if (buttonEdge(buttonDown) && ui.systemScroll < 2) {
       ui.systemScroll++;
     }
-    if (buttonShortRelease(buttonSelect, nowMs) || buttonLongEdge(buttonSelect)) {
+    if (buttonShortRelease(buttonSelect, nowMs)) {
       ui.screen = SCREEN_MENU;
     }
     return;
@@ -1875,9 +1943,19 @@ void renderDurationScreen() {
   oled.setFont(u8g2_font_6x10_tr);
   oled.drawStr(0, 10, "Duration");
   snprintf(line, sizeof(line), "%u min", ui.editDurationMinutes);
-  oled.drawStr(0, 30, line);
-  oled.drawStr(0, 48, "Tap select to save");
-  oled.drawStr(0, 58, "Hold select back");
+  if (!ui.editSelectingAction) {
+    oled.drawStr(0, 30, ">");
+  }
+  oled.drawStr(10, 30, line);
+  oled.drawStr(0, 40, "Select: actions");
+  if (ui.editSelectingAction && ui.editActionIndex == 0) {
+    oled.drawStr(0, 50, ">");
+  }
+  oled.drawStr(10, 50, "save");
+  if (ui.editSelectingAction && ui.editActionIndex == 1) {
+    oled.drawStr(0, 60, ">");
+  }
+  oled.drawStr(10, 60, "back");
   oled.sendBuffer();
 }
 
@@ -1887,9 +1965,19 @@ void renderUtcScreen() {
   oled.setFont(u8g2_font_6x10_tr);
   oled.drawStr(0, 10, "UTC Offset");
   snprintf(line, sizeof(line), "UTC %+d", ui.editUtcOffsetHours);
-  oled.drawStr(0, 30, line);
-  oled.drawStr(0, 48, "Tap select to save");
-  oled.drawStr(0, 58, "Hold select back");
+  if (!ui.editSelectingAction) {
+    oled.drawStr(0, 30, ">");
+  }
+  oled.drawStr(10, 30, line);
+  oled.drawStr(0, 40, "Select: actions");
+  if (ui.editSelectingAction && ui.editActionIndex == 0) {
+    oled.drawStr(0, 50, ">");
+  }
+  oled.drawStr(10, 50, "save");
+  if (ui.editSelectingAction && ui.editActionIndex == 1) {
+    oled.drawStr(0, 60, ">");
+  }
+  oled.drawStr(10, 60, "back");
   oled.sendBuffer();
 }
 
@@ -1899,9 +1987,19 @@ void renderBatteryOffsetScreen() {
   oled.setFont(u8g2_font_6x10_tr);
   oled.drawStr(0, 10, "Volt Offset");
   snprintf(line, sizeof(line), "%+.1f V", static_cast<float>(ui.editBatteryOffsetTenths) / 10.0f);
-  oled.drawStr(0, 30, line);
-  oled.drawStr(0, 48, "Tap select to save");
-  oled.drawStr(0, 58, "Hold select back");
+  if (!ui.editSelectingAction) {
+    oled.drawStr(0, 30, ">");
+  }
+  oled.drawStr(10, 30, line);
+  oled.drawStr(0, 40, "Select: actions");
+  if (ui.editSelectingAction && ui.editActionIndex == 0) {
+    oled.drawStr(0, 50, ">");
+  }
+  oled.drawStr(10, 50, "save");
+  if (ui.editSelectingAction && ui.editActionIndex == 1) {
+    oled.drawStr(0, 60, ">");
+  }
+  oled.drawStr(10, 60, "back");
   oled.sendBuffer();
 }
 
@@ -1911,9 +2009,19 @@ void renderManualScreen() {
   oled.setFont(u8g2_font_6x10_tr);
   oled.drawStr(0, 10, "Manual Run");
   snprintf(line, sizeof(line), "%u min", ui.editManualMinutes);
-  oled.drawStr(0, 30, line);
-  oled.drawStr(0, 48, "Tap select to run");
-  oled.drawStr(0, 58, "Hold select cancel");
+  if (!ui.editSelectingAction) {
+    oled.drawStr(0, 30, ">");
+  }
+  oled.drawStr(10, 30, line);
+  oled.drawStr(0, 40, "Select: actions");
+  if (ui.editSelectingAction && ui.editActionIndex == 0) {
+    oled.drawStr(0, 50, ">");
+  }
+  oled.drawStr(10, 50, "run");
+  if (ui.editSelectingAction && ui.editActionIndex == 1) {
+    oled.drawStr(0, 60, ">");
+  }
+  oled.drawStr(10, 60, "back");
   oled.sendBuffer();
 }
 
@@ -2013,6 +2121,8 @@ void suppressGpsTimeSync() {
 void openMenu() {
   ui.menuIndex = 0;
   ui.menuScroll = 0;
+  ui.editSelectingAction = false;
+  ui.editActionIndex = 0;
   ui.screen = SCREEN_MENU;
   if (ui.displayOn) {
     renderMenuScreen();
@@ -2021,6 +2131,8 @@ void openMenu() {
 
 void openDurationEditor() {
   ui.editDurationMinutes = settings.runDurationMinutes;
+  ui.editSelectingAction = false;
+  ui.editActionIndex = 0;
   ui.screen = SCREEN_EDIT_DURATION;
   if (ui.displayOn) {
     renderDurationScreen();
@@ -2029,6 +2141,8 @@ void openDurationEditor() {
 
 void openUtcEditor() {
   ui.editUtcOffsetHours = settings.utcOffsetHours;
+  ui.editSelectingAction = false;
+  ui.editActionIndex = 0;
   ui.screen = SCREEN_EDIT_UTC;
   if (ui.displayOn) {
     renderUtcScreen();
@@ -2037,6 +2151,8 @@ void openUtcEditor() {
 
 void openBatteryOffsetEditor() {
   ui.editBatteryOffsetTenths = settings.batteryOffsetTenths;
+  ui.editSelectingAction = false;
+  ui.editActionIndex = 0;
   ui.screen = SCREEN_EDIT_VOFFSET;
   if (ui.displayOn) {
     renderBatteryOffsetScreen();
@@ -2045,6 +2161,8 @@ void openBatteryOffsetEditor() {
 
 void openManualEditor() {
   ui.editManualMinutes = settings.runDurationMinutes;
+  ui.editSelectingAction = false;
+  ui.editActionIndex = 0;
   ui.screen = SCREEN_EDIT_MANUAL;
   if (ui.displayOn) {
     renderManualScreen();
@@ -2053,6 +2171,8 @@ void openManualEditor() {
 
 void openSystemScreen() {
   ui.systemScroll = 0;
+  ui.editSelectingAction = false;
+  ui.editActionIndex = 0;
   ui.screen = SCREEN_SYSTEM;
   if (ui.displayOn) {
     renderSystemScreen();
