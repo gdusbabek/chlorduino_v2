@@ -24,7 +24,6 @@
 #include <Bounce2.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
-#include <RotaryEncoder.h>
 #include <stdio.h>
 
 enum SystemMode {
@@ -58,11 +57,6 @@ struct ButtonState {
   bool longPressed = false;
   unsigned long lastChangeMs = 0;
   unsigned long pressedAtMs = 0;
-};
-
-struct EncoderState {
-  int8_t pendingSteps = 0;
-  long lastPosition = 0;
 };
 
 enum UiInputAction {
@@ -199,7 +193,6 @@ StartupState startup;
 ButtonState buttonUp;
 ButtonState buttonDown;
 ButtonState buttonSelect;
-EncoderState encoder;
 InputEvents inputEvents;
 SystemMode systemMode = MODE_BOOT;
 
@@ -211,7 +204,6 @@ TinyGPSPlus gps;
 OneWire oneWireBus(Pins::ONE_WIRE);
 DallasTemperature waterTempSensor(&oneWireBus);
 U8G2_SH1106_128X64_NONAME_F_HW_I2C oled(U8G2_R0, U8X8_PIN_NONE);
-RotaryEncoder rotaryEncoder(Pins::BUTTON_UP, Pins::BUTTON_DOWN, RotaryEncoder::LatchMode::FOUR3);
 
 char startupLog[STARTUP_LOG_LINES][STARTUP_LINE_CHARS + 1] = {};
 uint8_t startupLogCount = 0;
@@ -242,7 +234,6 @@ const char *const MENU_ITEMS[MENU_ITEM_COUNT] = {
 
 float readBatteryVoltage();
 void readRawButtons(unsigned long nowMs);
-void readEncoder(unsigned long nowMs);
 void collectInputEvents(unsigned long nowMs);
 void updateButton(ButtonState &button, Bounce &debouncer, const char *label, unsigned long nowMs);
 void updateSensors(unsigned long nowMs);
@@ -372,7 +363,6 @@ void loop() {
 
   handleSerialCommands();
   readRawButtons(nowMs);
-  readEncoder(nowMs);
   collectInputEvents(nowMs);
   updateSensors(nowMs);
   runSafetyChecks(nowMs);
@@ -385,71 +375,29 @@ void loop() {
 }
 
 void readRawButtons(unsigned long nowMs) {
-  if (currentInputMode() != INPUT_MODE_BUTTONS) {
-    return;
-  }
-
   updateButton(buttonUp, debouncerUp, "up", nowMs);
   updateButton(buttonDown, debouncerDown, "down", nowMs);
   updateButton(buttonSelect, debouncerSelect, "select", nowMs);
 }
 
-void readEncoder(unsigned long nowMs) {
-  if (currentInputMode() != INPUT_MODE_ENCODER) {
-    return;
-  }
-
-  updateButton(buttonSelect, debouncerSelect, "select", nowMs);
-
-  rotaryEncoder.tick();
-
-  const long newPosition = rotaryEncoder.getPosition();
-  if (newPosition == encoder.lastPosition) {
-    return;
-  }
-
-  encoder.pendingSteps = (newPosition > encoder.lastPosition) ? 1 : -1;
-  encoder.lastPosition = newPosition;
-}
-
 void collectInputEvents(unsigned long nowMs) {
   inputEvents = {};
-
-  if (currentInputMode() == INPUT_MODE_BUTTONS) {
-    const bool upEdge = buttonEdge(buttonUp);
-    const bool downEdge = buttonEdge(buttonDown);
-    const bool selectShort = buttonShortRelease(buttonSelect, nowMs);
-
-    if (selectShort) {
-      inputEvents.action = UI_INPUT_SELECT_SHORT;
-    } else if (upEdge) {
-      inputEvents.action = UI_INPUT_UP;
-    } else if (downEdge) {
-      inputEvents.action = UI_INPUT_DOWN;
-    }
-
-    inputEvents.anyActivity =
-      upEdge || downEdge || buttonEdge(buttonSelect) ||
-      buttonShortRelease(buttonUp, nowMs) || buttonShortRelease(buttonDown, nowMs) ||
-      selectShort;
-    return;
-  }
-
-  if (encoder.pendingSteps > 0) {
-    inputEvents.action = UI_INPUT_UP;
-    encoder.pendingSteps = 0;
-  } else if (encoder.pendingSteps < 0) {
-    inputEvents.action = UI_INPUT_DOWN;
-    encoder.pendingSteps = 0;
-  }
-
+  const bool upEdge = buttonEdge(buttonUp);
+  const bool downEdge = buttonEdge(buttonDown);
   const bool selectShort = buttonShortRelease(buttonSelect, nowMs);
-  if (inputEvents.action == UI_INPUT_NONE && selectShort) {
+
+  if (selectShort) {
     inputEvents.action = UI_INPUT_SELECT_SHORT;
+  } else if (upEdge) {
+    inputEvents.action = UI_INPUT_UP;
+  } else if (downEdge) {
+    inputEvents.action = UI_INPUT_DOWN;
   }
 
   inputEvents.anyActivity =
-    (inputEvents.action != UI_INPUT_NONE) || buttonEdge(buttonSelect) || selectShort;
+    upEdge || downEdge || buttonEdge(buttonSelect) ||
+    buttonShortRelease(buttonUp, nowMs) || buttonShortRelease(buttonDown, nowMs) ||
+    selectShort;
 }
 
 void updateButton(ButtonState &button, Bounce &debouncer, const char *label, unsigned long nowMs) {
@@ -2316,10 +2264,6 @@ void resetInputState() {
   buttonDown = ButtonState{};
   buttonSelect = ButtonState{};
   inputEvents = InputEvents{};
-  encoder = EncoderState{};
-  rotaryEncoder.setPosition(0);
-  rotaryEncoder.tick();
-  encoder.lastPosition = rotaryEncoder.getPosition();
 }
 
 void openMenu() {
