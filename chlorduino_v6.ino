@@ -65,10 +65,15 @@ struct EncoderState {
   long lastPosition = 0;
 };
 
+enum UiInputAction {
+  UI_INPUT_NONE,
+  UI_INPUT_UP,
+  UI_INPUT_DOWN,
+  UI_INPUT_SELECT_SHORT
+};
+
 struct InputEvents {
-  bool up = false;
-  bool down = false;
-  bool selectShort = false;
+  UiInputAction action = UI_INPUT_NONE;
   bool anyActivity = false;
 };
 
@@ -411,26 +416,40 @@ void collectInputEvents(unsigned long nowMs) {
   inputEvents = {};
 
   if (currentInputMode() == INPUT_MODE_BUTTONS) {
-    inputEvents.up = buttonEdge(buttonUp);
-    inputEvents.down = buttonEdge(buttonDown);
-    inputEvents.selectShort = buttonShortRelease(buttonSelect, nowMs);
+    const bool upEdge = buttonEdge(buttonUp);
+    const bool downEdge = buttonEdge(buttonDown);
+    const bool selectShort = buttonShortRelease(buttonSelect, nowMs);
+
+    if (selectShort) {
+      inputEvents.action = UI_INPUT_SELECT_SHORT;
+    } else if (upEdge) {
+      inputEvents.action = UI_INPUT_UP;
+    } else if (downEdge) {
+      inputEvents.action = UI_INPUT_DOWN;
+    }
+
     inputEvents.anyActivity =
-      buttonEdge(buttonUp) || buttonEdge(buttonDown) || buttonEdge(buttonSelect) ||
+      upEdge || downEdge || buttonEdge(buttonSelect) ||
       buttonShortRelease(buttonUp, nowMs) || buttonShortRelease(buttonDown, nowMs) ||
-      buttonShortRelease(buttonSelect, nowMs);
+      selectShort;
     return;
   }
 
   if (encoder.pendingSteps > 0) {
-    inputEvents.up = true;
+    inputEvents.action = UI_INPUT_UP;
     encoder.pendingSteps = 0;
   } else if (encoder.pendingSteps < 0) {
-    inputEvents.down = true;
+    inputEvents.action = UI_INPUT_DOWN;
     encoder.pendingSteps = 0;
   }
 
-  inputEvents.selectShort = buttonShortRelease(buttonSelect, nowMs);
-  inputEvents.anyActivity = inputEvents.up || inputEvents.down || buttonEdge(buttonSelect) || inputEvents.selectShort;
+  const bool selectShort = buttonShortRelease(buttonSelect, nowMs);
+  if (inputEvents.action == UI_INPUT_NONE && selectShort) {
+    inputEvents.action = UI_INPUT_SELECT_SHORT;
+  }
+
+  inputEvents.anyActivity =
+    (inputEvents.action != UI_INPUT_NONE) || buttonEdge(buttonSelect) || selectShort;
 }
 
 void updateButton(ButtonState &button, Bounce &debouncer, const char *label, unsigned long nowMs) {
@@ -670,6 +689,10 @@ void runSafetyChecks(unsigned long nowMs) {
 }
 
 void runControlLogic(unsigned long nowMs) {
+  const bool eventUp = inputEvents.action == UI_INPUT_UP;
+  const bool eventDown = inputEvents.action == UI_INPUT_DOWN;
+  const bool eventSelect = inputEvents.action == UI_INPUT_SELECT_SHORT;
+
   if (!ui.displayOn) {
     if (systemMode == MODE_DOSING && inputEvents.anyActivity) {
       setDisplayPower(true);
@@ -678,7 +701,7 @@ void runControlLogic(unsigned long nowMs) {
       return;
     }
 
-    if (inputEvents.selectShort) {
+    if (eventSelect) {
       setDisplayPower(true);
       noteUserActivity(nowMs);
       return;
@@ -699,25 +722,25 @@ void runControlLogic(unsigned long nowMs) {
     return;
   }
 
-  if (ui.screen == SCREEN_IDLE && systemMode != MODE_DOSING && inputEvents.selectShort) {
+  if (ui.screen == SCREEN_IDLE && systemMode != MODE_DOSING && eventSelect) {
     openMenu();
     return;
   }
 
   if (ui.screen == SCREEN_MENU) {
-    if (inputEvents.up && ui.menuIndex > 0) {
+    if (eventUp && ui.menuIndex > 0) {
       ui.menuIndex--;
       if (ui.menuIndex < ui.menuScroll) {
         ui.menuScroll = ui.menuIndex;
       }
     }
-    if (inputEvents.down && ui.menuIndex < (MENU_ITEM_COUNT - 1)) {
+    if (eventDown && ui.menuIndex < (MENU_ITEM_COUNT - 1)) {
       ui.menuIndex++;
       if (ui.menuIndex >= (ui.menuScroll + 5)) {
         ui.menuScroll = ui.menuIndex - 4;
       }
     }
-    if (inputEvents.selectShort) {
+    if (eventSelect) {
       switch (ui.menuIndex) {
         case 0:
           openDurationEditor();
@@ -754,28 +777,28 @@ void runControlLogic(unsigned long nowMs) {
 
   if (ui.screen == SCREEN_EDIT_DURATION) {
     if (!ui.editSelectingAction) {
-      if (inputEvents.up && ui.editDurationMinutes < 30) {
+      if (eventUp && ui.editDurationMinutes < 30) {
         ui.editDurationMinutes++;
       }
-      if (inputEvents.down && ui.editDurationMinutes > 0) {
+      if (eventDown && ui.editDurationMinutes > 0) {
         ui.editDurationMinutes--;
       }
-      if (inputEvents.selectShort) {
+      if (eventSelect) {
         ui.editSelectingAction = true;
         ui.editActionIndex = 0;
       }
     } else {
-      if (inputEvents.up) {
+      if (eventUp) {
         if (ui.editActionIndex == 0) {
           ui.editSelectingAction = false;
         } else {
           ui.editActionIndex--;
         }
       }
-      if (inputEvents.down && ui.editActionIndex < 1) {
+      if (eventDown && ui.editActionIndex < 1) {
         ui.editActionIndex++;
       }
-      if (inputEvents.selectShort) {
+      if (eventSelect) {
         if (ui.editActionIndex == 0) {
           settings.runDurationMinutes = ui.editDurationMinutes;
           savePersistentSettings();
@@ -789,28 +812,28 @@ void runControlLogic(unsigned long nowMs) {
 
   if (ui.screen == SCREEN_EDIT_UTC) {
     if (!ui.editSelectingAction) {
-      if (inputEvents.up && ui.editUtcOffsetHours < 12) {
+      if (eventUp && ui.editUtcOffsetHours < 12) {
         ui.editUtcOffsetHours++;
       }
-      if (inputEvents.down && ui.editUtcOffsetHours > -12) {
+      if (eventDown && ui.editUtcOffsetHours > -12) {
         ui.editUtcOffsetHours--;
       }
-      if (inputEvents.selectShort) {
+      if (eventSelect) {
         ui.editSelectingAction = true;
         ui.editActionIndex = 0;
       }
     } else {
-      if (inputEvents.up) {
+      if (eventUp) {
         if (ui.editActionIndex == 0) {
           ui.editSelectingAction = false;
         } else {
           ui.editActionIndex--;
         }
       }
-      if (inputEvents.down && ui.editActionIndex < 1) {
+      if (eventDown && ui.editActionIndex < 1) {
         ui.editActionIndex++;
       }
-      if (inputEvents.selectShort) {
+      if (eventSelect) {
         if (ui.editActionIndex == 0) {
           settings.utcOffsetHours = ui.editUtcOffsetHours;
           savePersistentSettings();
@@ -824,25 +847,25 @@ void runControlLogic(unsigned long nowMs) {
 
   if (ui.screen == SCREEN_EDIT_INPUT) {
     if (!ui.editSelectingAction) {
-      if (inputEvents.up || inputEvents.down) {
+      if (eventUp || eventDown) {
         ui.editInputMode = (ui.editInputMode == INPUT_MODE_BUTTONS) ? INPUT_MODE_ENCODER : INPUT_MODE_BUTTONS;
       }
-      if (inputEvents.selectShort) {
+      if (eventSelect) {
         ui.editSelectingAction = true;
         ui.editActionIndex = 0;
       }
     } else {
-      if (inputEvents.up) {
+      if (eventUp) {
         if (ui.editActionIndex == 0) {
           ui.editSelectingAction = false;
         } else {
           ui.editActionIndex--;
         }
       }
-      if (inputEvents.down && ui.editActionIndex < 1) {
+      if (eventDown && ui.editActionIndex < 1) {
         ui.editActionIndex++;
       }
-      if (inputEvents.selectShort) {
+      if (eventSelect) {
         if (ui.editActionIndex == 0) {
           settings.inputMode = ui.editInputMode;
           savePersistentSettings();
@@ -857,28 +880,28 @@ void runControlLogic(unsigned long nowMs) {
 
   if (ui.screen == SCREEN_EDIT_VOFFSET) {
     if (!ui.editSelectingAction) {
-      if (inputEvents.up && ui.editBatteryOffsetTenths < 50) {
+      if (eventUp && ui.editBatteryOffsetTenths < 50) {
         ui.editBatteryOffsetTenths++;
       }
-      if (inputEvents.down && ui.editBatteryOffsetTenths > -50) {
+      if (eventDown && ui.editBatteryOffsetTenths > -50) {
         ui.editBatteryOffsetTenths--;
       }
-      if (inputEvents.selectShort) {
+      if (eventSelect) {
         ui.editSelectingAction = true;
         ui.editActionIndex = 0;
       }
     } else {
-      if (inputEvents.up) {
+      if (eventUp) {
         if (ui.editActionIndex == 0) {
           ui.editSelectingAction = false;
         } else {
           ui.editActionIndex--;
         }
       }
-      if (inputEvents.down && ui.editActionIndex < 1) {
+      if (eventDown && ui.editActionIndex < 1) {
         ui.editActionIndex++;
       }
-      if (inputEvents.selectShort) {
+      if (eventSelect) {
         if (ui.editActionIndex == 0) {
           settings.batteryOffsetTenths = ui.editBatteryOffsetTenths;
           savePersistentSettings();
@@ -892,28 +915,28 @@ void runControlLogic(unsigned long nowMs) {
 
   if (ui.screen == SCREEN_EDIT_MANUAL) {
     if (!ui.editSelectingAction) {
-      if (inputEvents.up && ui.editManualMinutes < 30) {
+      if (eventUp && ui.editManualMinutes < 30) {
         ui.editManualMinutes++;
       }
-      if (inputEvents.down && ui.editManualMinutes > 0) {
+      if (eventDown && ui.editManualMinutes > 0) {
         ui.editManualMinutes--;
       }
-      if (inputEvents.selectShort) {
+      if (eventSelect) {
         ui.editSelectingAction = true;
         ui.editActionIndex = 0;
       }
     } else {
-      if (inputEvents.up) {
+      if (eventUp) {
         if (ui.editActionIndex == 0) {
           ui.editSelectingAction = false;
         } else {
           ui.editActionIndex--;
         }
       }
-      if (inputEvents.down && ui.editActionIndex < 1) {
+      if (eventDown && ui.editActionIndex < 1) {
         ui.editActionIndex++;
       }
-      if (inputEvents.selectShort) {
+      if (eventSelect) {
         if (ui.editActionIndex == 0) {
           ui.editSelectingAction = false;
           ui.screen = SCREEN_IDLE;
@@ -930,13 +953,13 @@ void runControlLogic(unsigned long nowMs) {
   }
 
   if (ui.screen == SCREEN_SYSTEM) {
-    if (inputEvents.up && ui.systemScroll > 0) {
+    if (eventUp && ui.systemScroll > 0) {
       ui.systemScroll--;
     }
-    if (inputEvents.down && ui.systemScroll < 3) {
+    if (eventDown && ui.systemScroll < 3) {
       ui.systemScroll++;
     }
-    if (inputEvents.selectShort) {
+    if (eventSelect) {
       ui.screen = SCREEN_MENU;
     }
     return;
