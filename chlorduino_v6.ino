@@ -40,6 +40,7 @@ enum ScreenId {
   SCREEN_MENU,
   SCREEN_EDIT_DURATION,
   SCREEN_EDIT_UTC,
+  SCREEN_EDIT_INPUT,
   SCREEN_EDIT_VOFFSET,
   SCREEN_EDIT_MANUAL,
   SCREEN_SYSTEM,
@@ -113,6 +114,7 @@ struct UiState {
   unsigned long lastActivityMs = 0;
   uint16_t editDurationMinutes = 10;
   int8_t editUtcOffsetHours = -5;
+  InputMode editInputMode = INPUT_MODE_BUTTONS;
   int16_t editBatteryOffsetTenths = 12;
   uint16_t editManualMinutes = 0;
 };
@@ -219,10 +221,11 @@ float batteryHistory[10] = {};
 uint8_t batteryHistoryCount = 0;
 uint8_t batteryHistoryIndex = 0;
 
-constexpr uint8_t MENU_ITEM_COUNT = 8;
+constexpr uint8_t MENU_ITEM_COUNT = 9;
 const char *const MENU_ITEMS[MENU_ITEM_COUNT] = {
   "duration",
   "utc",
+  "input",
   "voffset",
   "manual",
   "system",
@@ -290,6 +293,7 @@ void renderIdleScreen();
 void renderMenuScreen();
 void renderDurationScreen();
 void renderUtcScreen();
+void renderInputScreen();
 void renderBatteryOffsetScreen();
 void renderManualScreen();
 void renderSystemScreen();
@@ -308,6 +312,7 @@ const char *inputModeText(InputMode mode);
 void openMenu();
 void openDurationEditor();
 void openUtcEditor();
+void openInputEditor();
 void openBatteryOffsetEditor();
 void openManualEditor();
 void openSystemScreen();
@@ -723,22 +728,25 @@ void runControlLogic(unsigned long nowMs) {
           openUtcEditor();
           return;
         case 2:
-          openBatteryOffsetEditor();
+          openInputEditor();
           return;
         case 3:
-          openManualEditor();
+          openBatteryOffsetEditor();
           return;
         case 4:
-          openSystemScreen();
+          openManualEditor();
           return;
         case 5:
+          openSystemScreen();
+          return;
+        case 6:
           performRunup();
           ui.screen = SCREEN_IDLE;
           return;
-        case 6:
+        case 7:
           restartController();
           return;
-        case 7:
+        case 8:
           ui.screen = SCREEN_IDLE;
           return;
       }
@@ -808,6 +816,39 @@ void runControlLogic(unsigned long nowMs) {
         if (ui.editActionIndex == 0) {
           settings.utcOffsetHours = ui.editUtcOffsetHours;
           savePersistentSettings();
+        }
+        ui.editSelectingAction = false;
+        ui.screen = SCREEN_MENU;
+      }
+    }
+    return;
+  }
+
+  if (ui.screen == SCREEN_EDIT_INPUT) {
+    if (!ui.editSelectingAction) {
+      if (inputEvents.up || inputEvents.down) {
+        ui.editInputMode = (ui.editInputMode == INPUT_MODE_BUTTONS) ? INPUT_MODE_ENCODER : INPUT_MODE_BUTTONS;
+      }
+      if (inputEvents.selectShort) {
+        ui.editSelectingAction = true;
+        ui.editActionIndex = 0;
+      }
+    } else {
+      if (inputEvents.up) {
+        if (ui.editActionIndex == 0) {
+          ui.editSelectingAction = false;
+        } else {
+          ui.editActionIndex--;
+        }
+      }
+      if (inputEvents.down && ui.editActionIndex < 1) {
+        ui.editActionIndex++;
+      }
+      if (inputEvents.selectShort) {
+        if (ui.editActionIndex == 0) {
+          settings.inputMode = ui.editInputMode;
+          savePersistentSettings();
+          resetInputState();
         }
         ui.editSelectingAction = false;
         ui.screen = SCREEN_MENU;
@@ -955,6 +996,9 @@ void updateUi() {
       return;
     case SCREEN_EDIT_UTC:
       renderUtcScreen();
+      return;
+    case SCREEN_EDIT_INPUT:
+      renderInputScreen();
       return;
     case SCREEN_EDIT_VOFFSET:
       renderBatteryOffsetScreen();
@@ -1337,6 +1381,7 @@ bool isMenuScreen(ScreenId screen) {
   return screen == SCREEN_MENU ||
          screen == SCREEN_EDIT_DURATION ||
          screen == SCREEN_EDIT_UTC ||
+         screen == SCREEN_EDIT_INPUT ||
          screen == SCREEN_EDIT_VOFFSET ||
          screen == SCREEN_EDIT_MANUAL ||
          screen == SCREEN_SYSTEM;
@@ -2077,6 +2122,28 @@ void renderUtcScreen() {
   oled.sendBuffer();
 }
 
+void renderInputScreen() {
+  char line[24];
+  oled.clearBuffer();
+  oled.setFont(u8g2_font_6x10_tr);
+  oled.drawStr(0, 10, "Input Mode");
+  snprintf(line, sizeof(line), "%s", inputModeText(ui.editInputMode));
+  if (!ui.editSelectingAction) {
+    oled.drawStr(0, 30, ">");
+  }
+  oled.drawStr(10, 30, line);
+  oled.drawStr(0, 40, "Select: actions");
+  if (ui.editSelectingAction && ui.editActionIndex == 0) {
+    oled.drawStr(0, 50, ">");
+  }
+  oled.drawStr(10, 50, "save");
+  if (ui.editSelectingAction && ui.editActionIndex == 1) {
+    oled.drawStr(0, 60, ">");
+  }
+  oled.drawStr(10, 60, "back");
+  oled.sendBuffer();
+}
+
 void renderBatteryOffsetScreen() {
   char line[24];
   oled.clearBuffer();
@@ -2265,6 +2332,16 @@ void openUtcEditor() {
   ui.screen = SCREEN_EDIT_UTC;
   if (ui.displayOn) {
     renderUtcScreen();
+  }
+}
+
+void openInputEditor() {
+  ui.editInputMode = currentInputMode();
+  ui.editSelectingAction = false;
+  ui.editActionIndex = 0;
+  ui.screen = SCREEN_EDIT_INPUT;
+  if (ui.displayOn) {
+    renderInputScreen();
   }
 }
 
