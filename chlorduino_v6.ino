@@ -60,9 +60,6 @@ struct ButtonState {
 };
 
 struct EncoderState {
-  bool clockHigh = true;
-  bool dataHigh = true;
-  bool lastClockHigh = true;
   int8_t stepDelta = 0;
 };
 
@@ -206,6 +203,7 @@ TinyGPSPlus gps;
 OneWire oneWireBus(Pins::ONE_WIRE);
 DallasTemperature waterTempSensor(&oneWireBus);
 U8G2_SH1106_128X64_NONAME_F_HW_I2C oled(U8G2_R0, U8X8_PIN_NONE);
+RotaryEncoder rotaryEncoder(RotaryEncoder::LatchMode::TWO03);
 
 char startupLog[STARTUP_LOG_LINES][STARTUP_LINE_CHARS + 1] = {};
 uint8_t startupLogCount = 0;
@@ -392,19 +390,20 @@ void readEncoder(unsigned long nowMs) {
     return;
   }
 
-  debouncerUp.update();
-  debouncerDown.update();
   updateButton(buttonSelect, debouncerSelect, "select", nowMs);
 
-  encoder.clockHigh = debouncerUp.read() == HIGH;
-  encoder.dataHigh = debouncerDown.read() == HIGH;
+  rotaryEncoder.tick(
+    digitalRead(Pins::BUTTON_UP) == HIGH ? 1 : 0,
+    digitalRead(Pins::BUTTON_DOWN) == HIGH ? 1 : 0
+  );
 
-  // On the KY-040, sample DT when CLK falls to infer one detent direction.
-  if (encoder.lastClockHigh && !encoder.clockHigh) {
-    encoder.stepDelta = encoder.dataHigh ? -1 : 1;
+  const RotaryEncoder::Direction direction = rotaryEncoder.getDirection();
+  // Normalize clockwise to "up" and counterclockwise to "down".
+  if (direction == RotaryEncoder::Direction::CLOCKWISE) {
+    encoder.stepDelta = -1;
+  } else if (direction == RotaryEncoder::Direction::COUNTERCLOCKWISE) {
+    encoder.stepDelta = 1;
   }
-
-  encoder.lastClockHigh = encoder.clockHigh;
 }
 
 void collectInputEvents(unsigned long nowMs) {
@@ -2230,9 +2229,12 @@ void resetInputState() {
   buttonSelect = ButtonState{};
   inputEvents = InputEvents{};
   encoder = EncoderState{};
-  encoder.clockHigh = digitalRead(Pins::BUTTON_UP) == HIGH;
-  encoder.dataHigh = digitalRead(Pins::BUTTON_DOWN) == HIGH;
-  encoder.lastClockHigh = encoder.clockHigh;
+  rotaryEncoder.setPosition(0);
+  rotaryEncoder.tick(
+    digitalRead(Pins::BUTTON_UP) == HIGH ? 1 : 0,
+    digitalRead(Pins::BUTTON_DOWN) == HIGH ? 1 : 0
+  );
+  rotaryEncoder.getDirection();
 }
 
 void openMenu() {
