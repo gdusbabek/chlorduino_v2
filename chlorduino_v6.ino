@@ -238,6 +238,8 @@ void initializeWatchdog();
 void restartController();
 bool isMenuScreen(ScreenId screen);
 void formatLastDoseText(char *buffer, size_t size, const char *prefix);
+uint32_t liveNextDoseEpochUtc();
+void formatDoseEpochText(char *buffer, size_t size, const char *prefix, uint32_t epochUtc);
 void formatNextDoseText(char *buffer, size_t size, const char *prefix);
 void startPumpRunMinutes(uint16_t minutes, unsigned long nowMs);
 void stopPumpRun();
@@ -752,7 +754,7 @@ void runControlLogic(unsigned long nowMs) {
     if (buttonEdge(buttonUp) && ui.systemScroll > 0) {
       ui.systemScroll--;
     }
-    if (buttonEdge(buttonDown) && ui.systemScroll < 1) {
+    if (buttonEdge(buttonDown) && ui.systemScroll < 2) {
       ui.systemScroll++;
     }
     if (buttonShortRelease(buttonSelect, nowMs) || buttonLongEdge(buttonSelect)) {
@@ -1059,7 +1061,11 @@ void processSerialCommand(const char *command) {
 
 void printState() {
   char lastDose[24];
+  char nextDoseStored[24];
+  char nextDoseLive[24];
   formatLastDoseText(lastDose, sizeof(lastDose), "");
+  formatDoseEpochText(nextDoseStored, sizeof(nextDoseStored), "", settings.nextDoseEpochUtc);
+  formatDoseEpochText(nextDoseLive, sizeof(nextDoseLive), "", liveNextDoseEpochUtc());
 
   Serial.print(F("Mode="));
   Serial.print(modeName(systemMode));
@@ -1075,8 +1081,6 @@ void printState() {
   Serial.print(settings.crashCount);
   Serial.print(F(" LastDose="));
   Serial.print(lastDose);
-  Serial.print(F(" NextDoseUtc="));
-  Serial.print(settings.nextDoseEpochUtc);
   Serial.print(F(" Temp="));
   if (sensors.tempValid) {
     Serial.print(static_cast<int>(roundf(sensors.waterTempF)));
@@ -1088,6 +1092,18 @@ void printState() {
   Serial.print(sensors.batteryVolts, 2);
   Serial.print(F("V Pump="));
   Serial.println(pump.enabled ? F("ON") : F("OFF"));
+
+  Serial.print(F("NowUtc="));
+  Serial.print(timeStatus() == timeNotSet ? 0 : now());
+  Serial.print(F(" StoredNextUtc="));
+  Serial.print(settings.nextDoseEpochUtc);
+  Serial.print(F(" LiveNextUtc="));
+  Serial.println(liveNextDoseEpochUtc());
+
+  Serial.print(F("NextStored="));
+  Serial.print(nextDoseStored);
+  Serial.print(F(" NextLive="));
+  Serial.println(nextDoseLive);
 }
 
 void loadPersistentSettings() {
@@ -1183,14 +1199,22 @@ void formatLastDoseText(char *buffer, size_t size, const char *prefix) {
   );
 }
 
-void formatNextDoseText(char *buffer, size_t size, const char *prefix) {
-  if (settings.nextDoseEpochUtc == 0) {
+uint32_t liveNextDoseEpochUtc() {
+  if (sensors.nextDoseEpochUtc != 0) {
+    return sensors.nextDoseEpochUtc;
+  }
+
+  return settings.nextDoseEpochUtc;
+}
+
+void formatDoseEpochText(char *buffer, size_t size, const char *prefix, uint32_t epochUtc) {
+  if (epochUtc == 0) {
     snprintf(buffer, size, "%sUNKNOWN", prefix);
     return;
   }
 
   const time_t localDoseTime =
-    static_cast<time_t>(settings.nextDoseEpochUtc) + (static_cast<long>(settings.utcOffsetHours) * SECS_PER_HOUR);
+    static_cast<time_t>(epochUtc) + (static_cast<long>(settings.utcOffsetHours) * SECS_PER_HOUR);
 
   snprintf(
     buffer,
@@ -1202,6 +1226,10 @@ void formatNextDoseText(char *buffer, size_t size, const char *prefix) {
     hour(localDoseTime),
     minute(localDoseTime)
   );
+}
+
+void formatNextDoseText(char *buffer, size_t size, const char *prefix) {
+  formatDoseEpochText(buffer, size, prefix, liveNextDoseEpochUtc());
 }
 
 time_t midnightUtcFor(time_t utc) {
@@ -1864,7 +1892,7 @@ void renderManualScreen() {
 }
 
 void renderSystemScreen() {
-  char lines[6][24];
+  char lines[7][24];
   oled.clearBuffer();
   oled.setFont(u8g2_font_6x10_tr);
 
@@ -1875,12 +1903,13 @@ void renderSystemScreen() {
   snprintf(lines[2], sizeof(lines[2]), "Reset: %s", restartReasonText(startup.restartReason));
   formatLastDoseText(lines[3], sizeof(lines[3]), "Dose: ");
   formatNextDoseText(lines[4], sizeof(lines[4]), "Next: ");
-  snprintf(lines[5], sizeof(lines[5]), "GPS:%s WDT:%ds", sensors.gpsHasFix ? "yes" : "no", watchdogTimeoutMs / 1000);
+  formatDoseEpochText(lines[5], sizeof(lines[5]), "Saved: ", settings.nextDoseEpochUtc);
+  snprintf(lines[6], sizeof(lines[6]), "GPS:%s WDT:%ds", sensors.gpsHasFix ? "yes" : "no", watchdogTimeoutMs / 1000);
 
   const uint8_t visibleRows = 5;
   for (uint8_t row = 0; row < visibleRows; ++row) {
     const uint8_t lineIndex = ui.systemScroll + row;
-    if (lineIndex >= 6) {
+    if (lineIndex >= 7) {
       break;
     }
 
