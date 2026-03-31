@@ -403,18 +403,8 @@ void readEncoder(unsigned long nowMs) {
     return;
   }
 
-  long delta = newPosition - encoder.lastPosition;
+  encoder.pendingSteps = (newPosition > encoder.lastPosition) ? 1 : -1;
   encoder.lastPosition = newPosition;
-
-  while (delta > 0 && encoder.pendingSteps < 8) {
-    encoder.pendingSteps++;
-    delta--;
-  }
-
-  while (delta < 0 && encoder.pendingSteps > -8) {
-    encoder.pendingSteps--;
-    delta++;
-  }
 }
 
 void collectInputEvents(unsigned long nowMs) {
@@ -433,10 +423,10 @@ void collectInputEvents(unsigned long nowMs) {
 
   if (encoder.pendingSteps > 0) {
     inputEvents.up = true;
-    encoder.pendingSteps--;
+    encoder.pendingSteps = 0;
   } else if (encoder.pendingSteps < 0) {
     inputEvents.down = true;
-    encoder.pendingSteps++;
+    encoder.pendingSteps = 0;
   }
 
   inputEvents.selectShort = buttonShortRelease(buttonSelect, nowMs);
