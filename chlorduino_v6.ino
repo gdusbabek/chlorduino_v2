@@ -402,7 +402,7 @@ void readEncoder(unsigned long nowMs) {
   if (direction == RotaryEncoder::Direction::CLOCKWISE) {
     encoder.stepDelta = -1;
   } else if (direction == RotaryEncoder::Direction::COUNTERCLOCKWISE) {
-    encoder.stepDelta = 1;
+    encoder.stepDelta = `;
   }
 }
 
