@@ -45,12 +45,31 @@ enum ScreenId {
   SCREEN_FAULT
 };
 
+enum InputMode {
+  INPUT_MODE_BUTTONS = 0,
+  INPUT_MODE_ENCODER = 1
+};
+
 struct ButtonState {
   bool pressed = false;
   bool changed = false;
   bool longPressed = false;
   unsigned long lastChangeMs = 0;
   unsigned long pressedAtMs = 0;
+};
+
+struct EncoderState {
+  bool clockHigh = true;
+  bool dataHigh = true;
+  bool lastClockHigh = true;
+  int8_t stepDelta = 0;
+};
+
+struct InputEvents {
+  bool up = false;
+  bool down = false;
+  bool selectShort = false;
+  bool anyActivity = false;
 };
 
 enum RestartReason {
@@ -114,6 +133,7 @@ struct PersistentSettings {
   int8_t utcOffsetHours = -5;
   uint16_t runDurationMinutes = 10;
   int16_t batteryOffsetTenths = 12;
+  uint8_t inputMode = INPUT_MODE_BUTTONS;
   uint32_t restartCount = 0;
   uint32_t crashCount = 0;
   uint32_t lastDoseEpochUtc = 0;
@@ -173,6 +193,8 @@ StartupState startup;
 ButtonState buttonUp;
 ButtonState buttonDown;
 ButtonState buttonSelect;
+EncoderState encoder;
+InputEvents inputEvents;
 SystemMode systemMode = MODE_BOOT;
 
 Bounce debouncerUp;
@@ -211,7 +233,9 @@ const char *const MENU_ITEMS[MENU_ITEM_COUNT] = {
 };
 
 float readBatteryVoltage();
-void readButtons();
+void readRawButtons(unsigned long nowMs);
+void readEncoder(unsigned long nowMs);
+void collectInputEvents(unsigned long nowMs);
 void updateButton(ButtonState &button, Bounce &debouncer, const char *label, unsigned long nowMs);
 void updateSensors(unsigned long nowMs);
 void updateBattery(unsigned long nowMs);
@@ -279,6 +303,9 @@ void setDisplayPower(bool enabled);
 time_t localTimeNow();
 void syncClockFromGps();
 void suppressGpsTimeSync();
+void resetInputState();
+InputMode currentInputMode();
+const char *inputModeText(InputMode mode);
 void openMenu();
 void openDurationEditor();
 void openUtcEditor();
@@ -314,6 +341,7 @@ void setup() {
   Wire.begin();
   initializeDisplay();
   loadPersistentSettings();
+  resetInputState();
   initializeTemperatureSensor();
 
   initializeStartup();
@@ -333,7 +361,9 @@ void loop() {
   }
 
   handleSerialCommands();
-  readButtons();
+  readRawButtons(nowMs);
+  readEncoder(nowMs);
+  collectInputEvents(nowMs);
   updateSensors(nowMs);
   runSafetyChecks(nowMs);
   runControlLogic(nowMs);
@@ -344,11 +374,60 @@ void loop() {
   delay(10);
 }
 
-void readButtons() {
-  const unsigned long nowMs = millis();
+void readRawButtons(unsigned long nowMs) {
+  if (currentInputMode() != INPUT_MODE_BUTTONS) {
+    return;
+  }
+
   updateButton(buttonUp, debouncerUp, "up", nowMs);
   updateButton(buttonDown, debouncerDown, "down", nowMs);
   updateButton(buttonSelect, debouncerSelect, "select", nowMs);
+}
+
+void readEncoder(unsigned long nowMs) {
+  encoder.stepDelta = 0;
+
+  if (currentInputMode() != INPUT_MODE_ENCODER) {
+    return;
+  }
+
+  debouncerUp.update();
+  debouncerDown.update();
+  updateButton(buttonSelect, debouncerSelect, "select", nowMs);
+
+  encoder.clockHigh = debouncerUp.read() == HIGH;
+  encoder.dataHigh = debouncerDown.read() == HIGH;
+
+  // On the KY-040, sample DT when CLK falls to infer one detent direction.
+  if (encoder.lastClockHigh && !encoder.clockHigh) {
+    encoder.stepDelta = encoder.dataHigh ? -1 : 1;
+  }
+
+  encoder.lastClockHigh = encoder.clockHigh;
+}
+
+void collectInputEvents(unsigned long nowMs) {
+  inputEvents = {};
+
+  if (currentInputMode() == INPUT_MODE_BUTTONS) {
+    inputEvents.up = buttonEdge(buttonUp);
+    inputEvents.down = buttonEdge(buttonDown);
+    inputEvents.selectShort = buttonShortRelease(buttonSelect, nowMs);
+    inputEvents.anyActivity =
+      buttonEdge(buttonUp) || buttonEdge(buttonDown) || buttonEdge(buttonSelect) ||
+      buttonShortRelease(buttonUp, nowMs) || buttonShortRelease(buttonDown, nowMs) ||
+      buttonShortRelease(buttonSelect, nowMs);
+    return;
+  }
+
+  if (encoder.stepDelta < 0) {
+    inputEvents.up = true;
+  } else if (encoder.stepDelta > 0) {
+    inputEvents.down = true;
+  }
+
+  inputEvents.selectShort = buttonShortRelease(buttonSelect, nowMs);
+  inputEvents.anyActivity = (encoder.stepDelta != 0) || buttonEdge(buttonSelect) || inputEvents.selectShort;
 }
 
 void updateButton(ButtonState &button, Bounce &debouncer, const char *label, unsigned long nowMs) {
@@ -589,20 +668,14 @@ void runSafetyChecks(unsigned long nowMs) {
 
 void runControlLogic(unsigned long nowMs) {
   if (!ui.displayOn) {
-    const bool anyButtonActivity =
-      buttonEdge(buttonUp) || buttonEdge(buttonDown) || buttonEdge(buttonSelect) ||
-      buttonShortRelease(buttonUp, nowMs) || buttonShortRelease(buttonDown, nowMs) ||
-      buttonShortRelease(buttonSelect, nowMs) ||
-      buttonLongEdge(buttonUp) || buttonLongEdge(buttonDown) || buttonLongEdge(buttonSelect);
-
-    if (systemMode == MODE_DOSING && anyButtonActivity) {
+    if (systemMode == MODE_DOSING && inputEvents.anyActivity) {
       setDisplayPower(true);
       pump.keepDisplayOn = true;
       noteUserActivity(nowMs);
       return;
     }
 
-    if (buttonShortRelease(buttonSelect, nowMs)) {
+    if (inputEvents.selectShort) {
       setDisplayPower(true);
       noteUserActivity(nowMs);
       return;
@@ -610,9 +683,7 @@ void runControlLogic(unsigned long nowMs) {
     return;
   }
 
-  if (buttonEdge(buttonUp) || buttonEdge(buttonDown) || buttonEdge(buttonSelect) ||
-      buttonShortRelease(buttonUp, nowMs) || buttonShortRelease(buttonDown, nowMs) ||
-      buttonShortRelease(buttonSelect, nowMs)) {
+  if (inputEvents.anyActivity) {
     noteUserActivity(nowMs);
   }
 
@@ -625,25 +696,25 @@ void runControlLogic(unsigned long nowMs) {
     return;
   }
 
-  if (ui.screen == SCREEN_IDLE && systemMode != MODE_DOSING && buttonShortRelease(buttonSelect, nowMs)) {
+  if (ui.screen == SCREEN_IDLE && systemMode != MODE_DOSING && inputEvents.selectShort) {
     openMenu();
     return;
   }
 
   if (ui.screen == SCREEN_MENU) {
-    if (buttonEdge(buttonUp) && ui.menuIndex > 0) {
+    if (inputEvents.up && ui.menuIndex > 0) {
       ui.menuIndex--;
       if (ui.menuIndex < ui.menuScroll) {
         ui.menuScroll = ui.menuIndex;
       }
     }
-    if (buttonEdge(buttonDown) && ui.menuIndex < (MENU_ITEM_COUNT - 1)) {
+    if (inputEvents.down && ui.menuIndex < (MENU_ITEM_COUNT - 1)) {
       ui.menuIndex++;
       if (ui.menuIndex >= (ui.menuScroll + 5)) {
         ui.menuScroll = ui.menuIndex - 4;
       }
     }
-    if (buttonShortRelease(buttonSelect, nowMs)) {
+    if (inputEvents.selectShort) {
       switch (ui.menuIndex) {
         case 0:
           openDurationEditor();
@@ -677,28 +748,28 @@ void runControlLogic(unsigned long nowMs) {
 
   if (ui.screen == SCREEN_EDIT_DURATION) {
     if (!ui.editSelectingAction) {
-      if (buttonEdge(buttonUp) && ui.editDurationMinutes < 30) {
+      if (inputEvents.up && ui.editDurationMinutes < 30) {
         ui.editDurationMinutes++;
       }
-      if (buttonEdge(buttonDown) && ui.editDurationMinutes > 0) {
+      if (inputEvents.down && ui.editDurationMinutes > 0) {
         ui.editDurationMinutes--;
       }
-      if (buttonShortRelease(buttonSelect, nowMs)) {
+      if (inputEvents.selectShort) {
         ui.editSelectingAction = true;
         ui.editActionIndex = 0;
       }
     } else {
-      if (buttonEdge(buttonUp)) {
+      if (inputEvents.up) {
         if (ui.editActionIndex == 0) {
           ui.editSelectingAction = false;
         } else {
           ui.editActionIndex--;
         }
       }
-      if (buttonEdge(buttonDown) && ui.editActionIndex < 1) {
+      if (inputEvents.down && ui.editActionIndex < 1) {
         ui.editActionIndex++;
       }
-      if (buttonShortRelease(buttonSelect, nowMs)) {
+      if (inputEvents.selectShort) {
         if (ui.editActionIndex == 0) {
           settings.runDurationMinutes = ui.editDurationMinutes;
           savePersistentSettings();
@@ -712,28 +783,28 @@ void runControlLogic(unsigned long nowMs) {
 
   if (ui.screen == SCREEN_EDIT_UTC) {
     if (!ui.editSelectingAction) {
-      if (buttonEdge(buttonUp) && ui.editUtcOffsetHours < 12) {
+      if (inputEvents.up && ui.editUtcOffsetHours < 12) {
         ui.editUtcOffsetHours++;
       }
-      if (buttonEdge(buttonDown) && ui.editUtcOffsetHours > -12) {
+      if (inputEvents.down && ui.editUtcOffsetHours > -12) {
         ui.editUtcOffsetHours--;
       }
-      if (buttonShortRelease(buttonSelect, nowMs)) {
+      if (inputEvents.selectShort) {
         ui.editSelectingAction = true;
         ui.editActionIndex = 0;
       }
     } else {
-      if (buttonEdge(buttonUp)) {
+      if (inputEvents.up) {
         if (ui.editActionIndex == 0) {
           ui.editSelectingAction = false;
         } else {
           ui.editActionIndex--;
         }
       }
-      if (buttonEdge(buttonDown) && ui.editActionIndex < 1) {
+      if (inputEvents.down && ui.editActionIndex < 1) {
         ui.editActionIndex++;
       }
-      if (buttonShortRelease(buttonSelect, nowMs)) {
+      if (inputEvents.selectShort) {
         if (ui.editActionIndex == 0) {
           settings.utcOffsetHours = ui.editUtcOffsetHours;
           savePersistentSettings();
@@ -747,28 +818,28 @@ void runControlLogic(unsigned long nowMs) {
 
   if (ui.screen == SCREEN_EDIT_VOFFSET) {
     if (!ui.editSelectingAction) {
-      if (buttonEdge(buttonUp) && ui.editBatteryOffsetTenths < 50) {
+      if (inputEvents.up && ui.editBatteryOffsetTenths < 50) {
         ui.editBatteryOffsetTenths++;
       }
-      if (buttonEdge(buttonDown) && ui.editBatteryOffsetTenths > -50) {
+      if (inputEvents.down && ui.editBatteryOffsetTenths > -50) {
         ui.editBatteryOffsetTenths--;
       }
-      if (buttonShortRelease(buttonSelect, nowMs)) {
+      if (inputEvents.selectShort) {
         ui.editSelectingAction = true;
         ui.editActionIndex = 0;
       }
     } else {
-      if (buttonEdge(buttonUp)) {
+      if (inputEvents.up) {
         if (ui.editActionIndex == 0) {
           ui.editSelectingAction = false;
         } else {
           ui.editActionIndex--;
         }
       }
-      if (buttonEdge(buttonDown) && ui.editActionIndex < 1) {
+      if (inputEvents.down && ui.editActionIndex < 1) {
         ui.editActionIndex++;
       }
-      if (buttonShortRelease(buttonSelect, nowMs)) {
+      if (inputEvents.selectShort) {
         if (ui.editActionIndex == 0) {
           settings.batteryOffsetTenths = ui.editBatteryOffsetTenths;
           savePersistentSettings();
@@ -782,28 +853,28 @@ void runControlLogic(unsigned long nowMs) {
 
   if (ui.screen == SCREEN_EDIT_MANUAL) {
     if (!ui.editSelectingAction) {
-      if (buttonEdge(buttonUp) && ui.editManualMinutes < 30) {
+      if (inputEvents.up && ui.editManualMinutes < 30) {
         ui.editManualMinutes++;
       }
-      if (buttonEdge(buttonDown) && ui.editManualMinutes > 0) {
+      if (inputEvents.down && ui.editManualMinutes > 0) {
         ui.editManualMinutes--;
       }
-      if (buttonShortRelease(buttonSelect, nowMs)) {
+      if (inputEvents.selectShort) {
         ui.editSelectingAction = true;
         ui.editActionIndex = 0;
       }
     } else {
-      if (buttonEdge(buttonUp)) {
+      if (inputEvents.up) {
         if (ui.editActionIndex == 0) {
           ui.editSelectingAction = false;
         } else {
           ui.editActionIndex--;
         }
       }
-      if (buttonEdge(buttonDown) && ui.editActionIndex < 1) {
+      if (inputEvents.down && ui.editActionIndex < 1) {
         ui.editActionIndex++;
       }
-      if (buttonShortRelease(buttonSelect, nowMs)) {
+      if (inputEvents.selectShort) {
         if (ui.editActionIndex == 0) {
           ui.editSelectingAction = false;
           ui.screen = SCREEN_IDLE;
@@ -820,13 +891,13 @@ void runControlLogic(unsigned long nowMs) {
   }
 
   if (ui.screen == SCREEN_SYSTEM) {
-    if (buttonEdge(buttonUp) && ui.systemScroll > 0) {
+    if (inputEvents.up && ui.systemScroll > 0) {
       ui.systemScroll--;
     }
-    if (buttonEdge(buttonDown) && ui.systemScroll < 2) {
+    if (inputEvents.down && ui.systemScroll < 3) {
       ui.systemScroll++;
     }
-    if (buttonShortRelease(buttonSelect, nowMs)) {
+    if (inputEvents.selectShort) {
       ui.screen = SCREEN_MENU;
     }
     return;
@@ -966,6 +1037,8 @@ void processSerialCommand(const char *command) {
     Serial.println(F("Available commands:"));
     Serial.println(F("  help"));
     Serial.println(F("  state"));
+    Serial.println(F("  input buttons"));
+    Serial.println(F("  input encoder"));
     Serial.println(F("  time HH:MM"));
     Serial.println(F("  date YYYY-MM-DD"));
     Serial.println(F("  runup"));
@@ -980,6 +1053,22 @@ void processSerialCommand(const char *command) {
 
   if (strcmp(command, "state") == 0) {
     printState();
+    return;
+  }
+
+  if (strcmp(command, "input buttons") == 0) {
+    settings.inputMode = INPUT_MODE_BUTTONS;
+    savePersistentSettings();
+    resetInputState();
+    Serial.println(F("Input mode set to buttons."));
+    return;
+  }
+
+  if (strcmp(command, "input encoder") == 0) {
+    settings.inputMode = INPUT_MODE_ENCODER;
+    savePersistentSettings();
+    resetInputState();
+    Serial.println(F("Input mode set to encoder."));
     return;
   }
 
@@ -1142,6 +1231,8 @@ void printState() {
   Serial.print(restartReasonName(startup.restartReason));
   Serial.print(F(" UTC="));
   Serial.print(settings.utcOffsetHours);
+  Serial.print(F(" Input="));
+  Serial.print(inputModeText(currentInputMode()));
   Serial.print(F(" RunMin="));
   Serial.print(settings.runDurationMinutes);
   Serial.print(F(" Restarts="));
@@ -1183,14 +1274,17 @@ void loadPersistentSettings() {
   const bool invalidUtcOffset = settings.utcOffsetHours < -12 || settings.utcOffsetHours > 12;
   const bool invalidRunDuration = settings.runDurationMinutes > 30U;
   const bool invalidBatteryOffset = settings.batteryOffsetTenths < -50 || settings.batteryOffsetTenths > 50;
+  const bool invalidInputMode = settings.inputMode > INPUT_MODE_ENCODER;
   const bool invalidLastDose = settings.lastDoseEpochUtc > 4102444800UL;
   const bool invalidNextDose = settings.nextDoseEpochUtc > 4102444800UL;
 
-  if (uninitialized || invalidUtcOffset || invalidRunDuration || invalidBatteryOffset || invalidLastDose || invalidNextDose) {
+  if (uninitialized || invalidUtcOffset || invalidRunDuration || invalidBatteryOffset ||
+      invalidInputMode || invalidLastDose || invalidNextDose) {
     settings.magic = SETTINGS_MAGIC;
     settings.utcOffsetHours = -5;
     settings.runDurationMinutes = 10;
     settings.batteryOffsetTenths = 12;
+    settings.inputMode = INPUT_MODE_BUTTONS;
     if (uninitialized) {
       settings.restartCount = 0;
       settings.crashCount = 0;
@@ -1577,6 +1671,8 @@ void printStartupBanner() {
   Serial.println(startup.rawResetCause, HEX);
   Serial.print(F("Debug serial attached: "));
   Serial.println(startup.serialAttached ? F("yes") : F("no"));
+  Serial.print(F("Input mode: "));
+  Serial.println(inputModeText(currentInputMode()));
   formatLastDoseText(line, sizeof(line), "Last dose: ");
   Serial.println(line);
   Serial.println(F("GPS on Serial1 at 9600 baud."));
@@ -2026,7 +2122,7 @@ void renderManualScreen() {
 }
 
 void renderSystemScreen() {
-  char lines[7][24];
+  char lines[8][24];
   oled.clearBuffer();
   oled.setFont(u8g2_font_6x10_tr);
 
@@ -2035,15 +2131,16 @@ void renderSystemScreen() {
   snprintf(lines[0], sizeof(lines[0]), "Boots: %lu", static_cast<unsigned long>(settings.restartCount));
   snprintf(lines[1], sizeof(lines[1]), "Crashes: %lu", static_cast<unsigned long>(settings.crashCount));
   snprintf(lines[2], sizeof(lines[2]), "Reset: %s", restartReasonText(startup.restartReason));
-  formatLastDoseText(lines[3], sizeof(lines[3]), "Dose: ");
-  formatNextDoseText(lines[4], sizeof(lines[4]), "Next: ");
-  formatDoseEpochText(lines[5], sizeof(lines[5]), "Saved: ", settings.nextDoseEpochUtc);
-  snprintf(lines[6], sizeof(lines[6]), "GPS:%s WDT:%ds", sensors.gpsHasFix ? "yes" : "no", watchdogTimeoutMs / 1000);
+  snprintf(lines[3], sizeof(lines[3]), "Input: %s", inputModeText(currentInputMode()));
+  formatLastDoseText(lines[4], sizeof(lines[4]), "Dose: ");
+  formatNextDoseText(lines[5], sizeof(lines[5]), "Next: ");
+  formatDoseEpochText(lines[6], sizeof(lines[6]), "Saved: ", settings.nextDoseEpochUtc);
+  snprintf(lines[7], sizeof(lines[7]), "GPS:%s WDT:%ds", sensors.gpsHasFix ? "yes" : "no", watchdogTimeoutMs / 1000);
 
   const uint8_t visibleRows = 5;
   for (uint8_t row = 0; row < visibleRows; ++row) {
     const uint8_t lineIndex = ui.systemScroll + row;
-    if (lineIndex >= 7) {
+    if (lineIndex >= 8) {
       break;
     }
 
@@ -2099,6 +2196,14 @@ time_t localTimeNow() {
   return now() + (static_cast<long>(settings.utcOffsetHours) * SECS_PER_HOUR);
 }
 
+InputMode currentInputMode() {
+  return settings.inputMode == INPUT_MODE_ENCODER ? INPUT_MODE_ENCODER : INPUT_MODE_BUTTONS;
+}
+
+const char *inputModeText(InputMode mode) {
+  return mode == INPUT_MODE_ENCODER ? "encoder" : "buttons";
+}
+
 void syncClockFromGps() {
   if (!gps.date.isValid() || !gps.time.isValid()) {
     return;
@@ -2116,6 +2221,17 @@ void syncClockFromGps() {
 
 void suppressGpsTimeSync() {
   startup.gpsTimeSuppressedUntilMs = millis() + GPS_MANUAL_TIME_HOLDOFF_MS;
+}
+
+void resetInputState() {
+  buttonUp = ButtonState{};
+  buttonDown = ButtonState{};
+  buttonSelect = ButtonState{};
+  inputEvents = InputEvents{};
+  encoder = EncoderState{};
+  encoder.clockHigh = digitalRead(Pins::BUTTON_UP) == HIGH;
+  encoder.dataHigh = digitalRead(Pins::BUTTON_DOWN) == HIGH;
+  encoder.lastClockHigh = encoder.clockHigh;
 }
 
 void openMenu() {
