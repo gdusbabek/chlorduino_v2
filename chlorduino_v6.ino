@@ -237,6 +237,7 @@ void updateRestartCounters();
 void initializeWatchdog();
 void restartController();
 bool isMenuScreen(ScreenId screen);
+const char *monthAbbrev(uint8_t month);
 void formatLastDoseText(char *buffer, size_t size, const char *prefix);
 uint32_t liveNextDoseEpochUtc();
 void formatDoseEpochText(char *buffer, size_t size, const char *prefix, uint32_t epochUtc);
@@ -1179,6 +1180,19 @@ bool isMenuScreen(ScreenId screen) {
          screen == SCREEN_SYSTEM;
 }
 
+const char *monthAbbrev(uint8_t month) {
+  static const char *const kMonths[] = {
+    "???", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+  };
+
+  if (month < 1 || month > 12) {
+    return kMonths[0];
+  }
+
+  return kMonths[month];
+}
+
 void formatLastDoseText(char *buffer, size_t size, const char *prefix) {
   if (settings.lastDoseEpochUtc == 0) {
     snprintf(buffer, size, "%sNEVER", prefix);
@@ -1187,16 +1201,18 @@ void formatLastDoseText(char *buffer, size_t size, const char *prefix) {
 
   const time_t localDoseTime =
     static_cast<time_t>(settings.lastDoseEpochUtc) + (static_cast<long>(settings.utcOffsetHours) * SECS_PER_HOUR);
+  tmElements_t doseTm;
+  breakTime(localDoseTime, doseTm);
 
   snprintf(
     buffer,
     size,
     "%s%02d %s %02d:%02d",
     prefix,
-    day(localDoseTime),
-    monthShortStr(month(localDoseTime)),
-    hour(localDoseTime),
-    minute(localDoseTime)
+    doseTm.Day,
+    monthAbbrev(doseTm.Month),
+    doseTm.Hour,
+    doseTm.Minute
   );
 }
 
@@ -1216,16 +1232,18 @@ void formatDoseEpochText(char *buffer, size_t size, const char *prefix, uint32_t
 
   const time_t localDoseTime =
     static_cast<time_t>(epochUtc) + (static_cast<long>(settings.utcOffsetHours) * SECS_PER_HOUR);
+  tmElements_t doseTm;
+  breakTime(localDoseTime, doseTm);
 
   snprintf(
     buffer,
     size,
     "%s%02d %s %02d:%02d",
     prefix,
-    day(localDoseTime),
-    monthShortStr(month(localDoseTime)),
-    hour(localDoseTime),
-    minute(localDoseTime)
+    doseTm.Day,
+    monthAbbrev(doseTm.Month),
+    doseTm.Hour,
+    doseTm.Minute
   );
 }
 
@@ -1234,9 +1252,12 @@ void formatNextDoseText(char *buffer, size_t size, const char *prefix) {
 }
 
 time_t midnightUtcFor(time_t utc) {
-  return utc - (static_cast<long>(hour(utc)) * SECS_PER_HOUR) -
-         (static_cast<long>(minute(utc)) * SECS_PER_MIN) -
-         static_cast<long>(second(utc));
+  tmElements_t utcTm;
+  breakTime(utc, utcTm);
+
+  return utc - (static_cast<long>(utcTm.Hour) * SECS_PER_HOUR) -
+         (static_cast<long>(utcTm.Minute) * SECS_PER_MIN) -
+         static_cast<long>(utcTm.Second);
 }
 
 time_t sunsetEpochUtcForDate(time_t dateUtc) {
@@ -1246,9 +1267,10 @@ time_t sunsetEpochUtcForDate(time_t dateUtc) {
   calcSunriseSunset(dateUtc, gps.location.lat(), gps.location.lng(), transit, sunrise, sunset);
 
   long sunsetSeconds = lround(sunset * 3600.0);
-  time_t sunsetEpochUtc = midnightUtcFor(dateUtc) + sunsetSeconds;
+  const time_t midnightUtc = midnightUtcFor(dateUtc);
+  time_t sunsetEpochUtc = midnightUtc + sunsetSeconds;
 
-  if (sunsetEpochUtc < midnightUtcFor(dateUtc)) {
+  if (sunsetEpochUtc < midnightUtc) {
     sunsetEpochUtc += SECS_PER_DAY;
   }
 
@@ -1722,23 +1744,26 @@ void renderIdleScreen() {
   oled.setFont(u8g2_font_6x10_tr);
 
   if (timeStatus() != timeNotSet) {
-    snprintf(line, sizeof(line), "%02d:%02d:%02d", hour(localEpoch), minute(localEpoch), second(localEpoch));
+    tmElements_t localTm;
+    breakTime(localEpoch, localTm);
+
+    snprintf(line, sizeof(line), "%02d:%02d:%02d", localTm.Hour, localTm.Minute, localTm.Second);
     oled.drawStr(0, 10, line);
 
-	    snprintf(line, sizeof(line), "%02d %s", day(localEpoch), monthShortStr(month(localEpoch)));
+    snprintf(line, sizeof(line), "%02d %s", localTm.Day, monthAbbrev(localTm.Month));
     oled.drawStr(59, 10, line);
 
-	    if (sensors.tempValid) {
-	      snprintf(line, sizeof(line), "%dF", static_cast<int>(roundf(sensors.waterTempF)));
-	    } else {
-	      snprintf(line, sizeof(line), "--F");
-	    }
-	    oled.drawStr(104, 10, line);
-	  } else {
-	    oled.drawStr(0, 10, "--:--:--");
-	    oled.drawStr(59, 10, "-- ---");
-	    oled.drawStr(104, 10, "--F");
-	  }
+    if (sensors.tempValid) {
+      snprintf(line, sizeof(line), "%dF", static_cast<int>(roundf(sensors.waterTempF)));
+    } else {
+      snprintf(line, sizeof(line), "--F");
+    }
+    oled.drawStr(104, 10, line);
+  } else {
+    oled.drawStr(0, 10, "--:--:--");
+    oled.drawStr(59, 10, "-- ---");
+    oled.drawStr(104, 10, "--F");
+  }
 
   snprintf(
     line,
