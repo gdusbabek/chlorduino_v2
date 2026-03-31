@@ -24,6 +24,7 @@
 #include <Bounce2.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include <RotaryEncoder.h>
 #include <stdio.h>
 
 enum SystemMode {
@@ -154,9 +155,9 @@ namespace Pins {
   constexpr uint8_t BATTERY_ADC = A0;
   constexpr uint8_t PUMP_GATE = 1;
   constexpr uint8_t ONE_WIRE = 2;
-  constexpr uint8_t BUTTON_UP = 8;
-  constexpr uint8_t BUTTON_DOWN = 9;
-  constexpr uint8_t BUTTON_SELECT = 10;
+  constexpr uint8_t BUTTON_UP = 8;      // CLK
+  constexpr uint8_t BUTTON_DOWN = 9;    // DT
+  constexpr uint8_t BUTTON_SELECT = 10; // SW
 }
 
 constexpr unsigned long BATTERY_INTERVAL_MS = 2000;
