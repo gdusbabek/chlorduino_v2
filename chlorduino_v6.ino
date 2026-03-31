@@ -360,11 +360,11 @@ void updateButton(ButtonState &button, Bounce &debouncer, const char *label, uns
     button.changed = true;
     button.pressedAtMs = nowMs;
     button.lastChangeMs = nowMs;
-    if (Serial) {
-      Serial.print(F("button "));
-      Serial.print(label);
-      Serial.println(F(" fall"));
-    }
+    // if (Serial) {
+    //   Serial.print(F("button "));
+    //   Serial.print(label);
+    //   Serial.println(F(" fall"));
+    // }
     return;
   }
 
@@ -387,11 +387,11 @@ void updateButton(ButtonState &button, Bounce &debouncer, const char *label, uns
     button.longPressed = false;
     button.changed = true;
     button.lastChangeMs = nowMs;
-    if (Serial) {
-      Serial.print(F("button "));
-      Serial.print(label);
-      Serial.println(F(" rise"));
-    }
+    // if (Serial) {
+    //   Serial.print(F("button "));
+    //   Serial.print(label);
+    //   Serial.println(F(" rise"));
+    // }
   }
 }
 
