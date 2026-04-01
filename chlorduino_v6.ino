@@ -30,8 +30,7 @@ enum SystemMode {
   MODE_BOOT,
   MODE_IDLE,
   MODE_DOSING,
-  MODE_LOW_BATTERY,
-  MODE_FAULT
+  MODE_LOW_BATTERY
 };
 
 enum ScreenId {
@@ -42,8 +41,7 @@ enum ScreenId {
   SCREEN_EDIT_INPUT,
   SCREEN_EDIT_VOFFSET,
   SCREEN_EDIT_MANUAL,
-  SCREEN_SYSTEM,
-  SCREEN_FAULT
+  SCREEN_SYSTEM
 };
 
 enum InputMode {
@@ -273,7 +271,7 @@ void stopPumpRun();
 bool performRunup();
 bool gpsTimeSyncAllowed();
 void setMode(SystemMode nextMode);
-void enterFault(const __FlashStringHelper *message);
+void stopPumpForSafety(const __FlashStringHelper *message);
 const __FlashStringHelper *modeName(SystemMode mode);
 RestartReason detectRestartReason(uint8_t &rawCause);
 const __FlashStringHelper *restartReasonName(RestartReason reason);
@@ -629,12 +627,12 @@ void runSafetyChecks(unsigned long nowMs) {
   if (pump.commandedOn) {
     const unsigned long currentRunMs = nowMs - pump.startedAtMs;
     if (currentRunMs > config.maxPumpContinuousMs) {
-      enterFault(F("Pump runtime exceeded"));
+      stopPumpForSafety(F("Pump runtime exceeded"));
       return;
     }
 
     if ((pump.accumulatedTodayMs + currentRunMs) > config.maxPumpDailyMs) {
-      enterFault(F("Daily dose exceeded"));
+      stopPumpForSafety(F("Daily dose exceeded"));
       return;
     }
   }
@@ -925,7 +923,7 @@ void runControlLogic(unsigned long nowMs) {
     return;
   }
 
-  if (systemMode == MODE_LOW_BATTERY || systemMode == MODE_FAULT) {
+  if (systemMode == MODE_LOW_BATTERY) {
     pump.commandedOn = false;
     return;
   }
@@ -981,7 +979,6 @@ void updateUi() {
     case SCREEN_SYSTEM:
       renderSystemScreen();
       return;
-    case SCREEN_FAULT:
     default:
       renderIdleScreen();
       return;
@@ -1561,10 +1558,9 @@ void setMode(SystemMode nextMode) {
   Serial.println(modeName(systemMode));
 }
 
-void enterFault(const __FlashStringHelper *message) {
-  pump.commandedOn = false;
-  setMode(MODE_FAULT);
-  Serial.print(F("FAULT: "));
+void stopPumpForSafety(const __FlashStringHelper *message) {
+  stopPumpRun();
+  Serial.print(F("SAFETY STOP: "));
   Serial.println(message);
 }
 
@@ -1578,8 +1574,6 @@ const __FlashStringHelper *modeName(SystemMode mode) {
       return F("DOSING");
     case MODE_LOW_BATTERY:
       return F("LOW_BATTERY");
-    case MODE_FAULT:
-      return F("FAULT");
     default:
       return F("UNKNOWN");
   }
