@@ -376,10 +376,9 @@ void loop() {
 }
 
 void readRawButtons(unsigned long nowMs) {
-  if (currentInputMode() == INPUT_MODE_BUTTONS) {
-    updateButton(buttonUp, debouncerUp, "up", nowMs);
-    updateButton(buttonDown, debouncerDown, "down", nowMs);
-  }
+  // Keep the button path active until encoder handling is reintroduced.
+  updateButton(buttonUp, debouncerUp, "up", nowMs);
+  updateButton(buttonDown, debouncerDown, "down", nowMs);
   updateButton(buttonSelect, debouncerSelect, "select", nowMs);
 }
 
@@ -2269,7 +2268,6 @@ void resetInputState() {
   buttonDown = ButtonState{};
   buttonSelect = ButtonState{};
   inputEvents = InputEvents{};
-  Serial.println("Reset input state");
 }
 
 void openMenu() {
