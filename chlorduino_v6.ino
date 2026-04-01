@@ -120,6 +120,7 @@ struct UiState {
 struct StartupState {
   RestartReason restartReason = RESTART_UNKNOWN;
   uint8_t rawResetCause = 0;
+  unsigned long startedAtMs = 0;
   bool serialAttached = false;
   bool gpsLocked = false;
   unsigned long gpsLockWaitMs = 0;
@@ -172,6 +173,7 @@ constexpr unsigned long DISPLAY_TIMEOUT_MS = 60000;
 constexpr unsigned long MENU_TIMEOUT_MS = 30000;
 constexpr unsigned long SHORT_PRESS_MAX_MS = 2000;
 constexpr unsigned long TEMP_STARTUP_RETRY_MS = 1000;
+constexpr unsigned long STARTUP_TIMEOUT_MS = 5UL * 60UL * 1000UL;
 constexpr unsigned long GPS_MANUAL_TIME_HOLDOFF_MS = 2UL * 60UL * 60UL * 1000UL;
 constexpr long RUNUP_TARGET_LEAD_SECONDS = 45L;
 constexpr long RUNUP_MIN_LEAD_SECONDS = 35L;
@@ -260,6 +262,8 @@ void savePersistentSettings();
 void updateRestartCounters();
 void initializeWatchdog();
 void restartController();
+void feedWatchdog();
+void enforceStartupTimeout();
 bool isMenuScreen(ScreenId screen);
 const char *monthAbbrev(uint8_t month);
 void formatLastDoseText(char *buffer, size_t size, const char *prefix);
@@ -317,6 +321,11 @@ bool buttonEdge(const ButtonState &button);
 bool buttonLongEdge(const ButtonState &button);
 
 void setup() {
+  startup.startedAtMs = millis();
+  if (startup.startedAtMs == 0) {
+    startup.startedAtMs = 1;
+  }
+
   pinMode(Pins::BUTTON_UP, INPUT_PULLUP);
   pinMode(Pins::BUTTON_DOWN, INPUT_PULLUP);
   pinMode(Pins::BUTTON_SELECT, INPUT_PULLUP);
@@ -339,6 +348,7 @@ void setup() {
 
   analogReadResolution(12);
   Wire.begin();
+  initializeWatchdog();
   initializeDisplay();
   loadPersistentSettings();
   resetInputState();
@@ -350,15 +360,13 @@ void setup() {
   ui.screen = SCREEN_IDLE;
   setMode(MODE_IDLE);
   renderIdleScreen();
-  initializeWatchdog();
+  startup.startedAtMs = 0;
 }
 
 void loop() {
   const unsigned long nowMs = millis();
 
-  if (watchdogTimeoutMs > 0) {
-    Watchdog.reset();
-  }
+  feedWatchdog();
 
   handleSerialCommands();
   readRawButtons(nowMs);
@@ -1336,6 +1344,30 @@ void initializeWatchdog() {
   }
 }
 
+void feedWatchdog() {
+  if (watchdogTimeoutMs > 0) {
+    Watchdog.reset();
+  }
+}
+
+void enforceStartupTimeout() {
+  if (startup.startedAtMs == 0) {
+    return;
+  }
+
+  if ((millis() - startup.startedAtMs) < STARTUP_TIMEOUT_MS) {
+    return;
+  }
+
+  if (Serial) {
+    Serial.println(F("Startup timeout, restarting controller."));
+  }
+
+  renderStartupScreen("Startup timeout");
+  delay(50);
+  restartController();
+}
+
 void restartController() {
 #if defined(ARDUINO_ARCH_SAMD)
   NVIC_SystemReset();
@@ -1661,6 +1693,8 @@ bool attachDebugSerial(unsigned long timeoutMs) {
   const unsigned long startedAtMs = millis();
 
   while (!Serial && (millis() - startedAtMs) < timeoutMs) {
+    feedWatchdog();
+    enforceStartupTimeout();
     delay(10);
   }
 
@@ -1700,6 +1734,8 @@ void waitForGpsStartupLock() {
   }
 
   while (true) {
+    feedWatchdog();
+    enforceStartupTimeout();
     consumeGpsData();
 
     const unsigned long nowMs = millis();
@@ -1796,6 +1832,8 @@ void waitForTemperatureStartupLock() {
 
   while (true) {
     const unsigned long nowMs = millis();
+    feedWatchdog();
+    enforceStartupTimeout();
     if ((nowMs - lastSampleAttemptMs) >= TEMP_STARTUP_RETRY_MS || lastSampleAttemptMs == 0) {
       lastSampleAttemptMs = nowMs;
       sampleTemperatureNow();
@@ -2221,6 +2259,8 @@ void waitForStartupLineDwell() {
   }
 
   while ((millis() - lastStartupLogMs) < STARTUP_LINE_MIN_MS) {
+    feedWatchdog();
+    enforceStartupTimeout();
     delay(20);
   }
 }
