@@ -645,6 +645,14 @@ void runControlLogic(unsigned long nowMs) {
   const bool eventDown = inputEvents.action == UI_INPUT_DOWN;
   const bool eventSelect = inputEvents.action == UI_INPUT_SELECT_SHORT;
 
+  if (systemMode == MODE_IDLE &&
+      settings.runDurationMinutes > 0 &&
+      sensors.nextDoseEpochUtc != 0 &&
+      now() >= static_cast<time_t>(sensors.nextDoseEpochUtc)) {
+    startPumpRunMinutes(settings.runDurationMinutes, nowMs);
+    Serial.println(F("Scheduled pump run started."));
+  }
+
   if (!ui.displayOn) {
     if (systemMode == MODE_DOSING && inputEvents.anyActivity) {
       setDisplayPower(true);
@@ -663,15 +671,6 @@ void runControlLogic(unsigned long nowMs) {
 
   if (inputEvents.anyActivity) {
     noteUserActivity(nowMs);
-  }
-
-  if (systemMode == MODE_IDLE &&
-      settings.runDurationMinutes > 0 &&
-      sensors.nextDoseEpochUtc != 0 &&
-      now() >= static_cast<time_t>(sensors.nextDoseEpochUtc)) {
-    startPumpRunMinutes(settings.runDurationMinutes, nowMs);
-    Serial.println(F("Scheduled pump run started."));
-    return;
   }
 
   if (ui.screen == SCREEN_IDLE && systemMode != MODE_DOSING && eventSelect) {
