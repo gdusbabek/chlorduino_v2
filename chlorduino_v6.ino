@@ -559,6 +559,7 @@ void consumeGpsData() {
   sensors.gpsHasFix = gps.location.isValid() && gps.date.isValid() && gps.time.isValid();
   if (gpsTimeSyncAllowed() && sensors.gpsHasFix && gps.date.isUpdated() && gps.time.isUpdated()) {
     syncClockFromGps();
+    refreshSchedule(true);
   }
 }
 
@@ -603,8 +604,23 @@ void refreshSchedule(bool persist) {
   }
 
   time_t nextDoseUtc = static_cast<time_t>(settings.nextDoseEpochUtc);
-  if (persist || nextDoseUtc == 0) {
+  const bool nextDoseMissing = nextDoseUtc == 0;
+  const bool nextDoseBeforeLastDose =
+    settings.lastDoseEpochUtc != 0 &&
+    nextDoseUtc != 0 &&
+    nextDoseUtc <= static_cast<time_t>(settings.lastDoseEpochUtc);
+  const bool nextDoseTooFarInFuture =
+    nextDoseUtc != 0 &&
+    nextDoseUtc > (utcNow + (2UL * SECS_PER_DAY));
+  const bool scheduledDoseAlreadyRan =
+    settings.lastDoseEpochUtc != 0 &&
+    nextDoseUtc != 0 &&
+    static_cast<time_t>(settings.lastDoseEpochUtc) >= nextDoseUtc;
+
+  if (persist || nextDoseMissing || nextDoseBeforeLastDose || nextDoseTooFarInFuture ||
+      (scheduledDoseAlreadyRan && nextDoseUtc <= utcNow)) {
     nextDoseUtc = computeNextDoseEpochUtc(utcNow);
+    persist = true;
   }
 
   if (nextDoseUtc == 0) {
