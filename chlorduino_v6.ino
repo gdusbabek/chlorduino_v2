@@ -169,6 +169,7 @@ constexpr unsigned long MIN_GPS_SPINNER_MS = 2000;
 constexpr unsigned long MIN_TEMP_SPINNER_MS = 2000;
 constexpr unsigned long POST_LOCK_SCREEN_MS = 5000;
 constexpr unsigned long STARTUP_LINE_MIN_MS = 1000;
+constexpr unsigned long GPS_STARTUP_MAX_AGE_MS = 1500;
 constexpr unsigned long DISPLAY_TIMEOUT_MS = 60000;
 constexpr unsigned long MENU_TIMEOUT_MS = 30000;
 constexpr unsigned long SHORT_PRESS_MAX_MS = 2000;
@@ -1763,10 +1764,16 @@ void waitForGpsStartupLock() {
       Serial.print(gps.satellites.isValid() ? gps.satellites.value() : 0);
       Serial.print(F(" location="));
       Serial.print(gps.location.isValid() ? F("ok") : F("..."));
+      Serial.print(F(" age="));
+      Serial.print(gps.location.isValid() ? gps.location.age() : 0UL);
       Serial.print(F(" date="));
       Serial.print(gps.date.isValid() ? F("ok") : F("..."));
+      Serial.print(F(" age="));
+      Serial.print(gps.date.isValid() ? gps.date.age() : 0UL);
       Serial.print(F(" time="));
-      Serial.println(gps.time.isValid() ? F("ok") : F("..."));
+      Serial.print(gps.time.isValid() ? F("ok") : F("..."));
+      Serial.print(F(" age="));
+      Serial.println(gps.time.isValid() ? gps.time.age() : 0UL);
     }
 
     char spinnerLine[STARTUP_LINE_CHARS + 1];
@@ -1899,7 +1906,12 @@ void waitForTemperatureStartupLock() {
 }
 
 bool gpsStartupLockAcquired() {
-  return gps.location.isValid() && gps.date.isValid() && gps.time.isValid();
+  return gps.location.isValid() &&
+         gps.date.isValid() &&
+         gps.time.isValid() &&
+         gps.location.age() <= GPS_STARTUP_MAX_AGE_MS &&
+         gps.date.age() <= GPS_STARTUP_MAX_AGE_MS &&
+         gps.time.age() <= GPS_STARTUP_MAX_AGE_MS;
 }
 
 bool temperatureStartupLockAcquired() {
