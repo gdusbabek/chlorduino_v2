@@ -179,6 +179,7 @@ constexpr unsigned long SHORT_PRESS_MAX_MS = 2000;
 constexpr unsigned long TEMP_STARTUP_RETRY_MS = 1000;
 constexpr unsigned long STARTUP_TIMEOUT_MS = 5UL * 60UL * 1000UL;
 constexpr unsigned long GPS_MANUAL_TIME_HOLDOFF_MS = 2UL * 60UL * 60UL * 1000UL;
+constexpr long SCHEDULED_DOSE_GRACE_SECONDS = 5L * 60L;
 constexpr long RUNUP_TARGET_LEAD_SECONDS = 45L;
 constexpr long RUNUP_MIN_LEAD_SECONDS = 35L;
 constexpr uint8_t STARTUP_LOG_LINES = 6;
@@ -602,6 +603,10 @@ bool storedScheduleNeedsRebuild(time_t utcNow) {
     return true;
   }
 
+  if (nextDoseUtc < (utcNow - SCHEDULED_DOSE_GRACE_SECONDS)) {
+    return true;
+  }
+
   if (nextDoseUtc > (utcNow + (2UL * SECS_PER_DAY))) {
     return true;
   }
@@ -715,12 +720,30 @@ void runControlLogic(unsigned long nowMs) {
   const bool eventDown = inputEvents.action == UI_INPUT_DOWN;
   const bool eventSelect = inputEvents.action == UI_INPUT_SELECT_SHORT;
 
+  const time_t utcNow = now();
+  const time_t nextDoseUtc = static_cast<time_t>(sensors.nextDoseEpochUtc);
   if (systemMode == MODE_IDLE &&
       settings.runDurationMinutes > 0 &&
-      sensors.nextDoseEpochUtc != 0 &&
-      now() >= static_cast<time_t>(sensors.nextDoseEpochUtc)) {
-    startPumpRunMinutes(settings.runDurationMinutes, nowMs);
-    Serial.println(F("Scheduled pump run started."));
+      nextDoseUtc != 0 &&
+      utcNow >= nextDoseUtc) {
+    const long secondsLate = static_cast<long>(
+      static_cast<int64_t>(utcNow) - static_cast<int64_t>(nextDoseUtc)
+    );
+
+    if (secondsLate <= SCHEDULED_DOSE_GRACE_SECONDS) {
+      startPumpRunMinutes(settings.runDurationMinutes, nowMs);
+      Serial.println(F("Scheduled pump run started."));
+    } else if (sensors.gpsHasFix && gps.location.isValid()) {
+      rebuildSchedule(true);
+      Serial.println(F("Missed scheduled dose window; rolled schedule forward."));
+    } else {
+      sensors.nextSunsetHours = -1.0f;
+      sensors.nextPumpRunHours = -1.0f;
+      sensors.nextDoseEpochUtc = 0;
+      settings.nextDoseEpochUtc = 0;
+      savePersistentSettings();
+      Serial.println(F("Missed scheduled dose window; cleared stale schedule."));
+    }
   }
 
   if (!ui.displayOn) {
