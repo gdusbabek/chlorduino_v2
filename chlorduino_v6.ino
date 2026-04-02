@@ -171,6 +171,8 @@ constexpr unsigned long MIN_TEMP_SPINNER_MS = 2000;
 constexpr unsigned long POST_LOCK_SCREEN_MS = 5000;
 constexpr unsigned long STARTUP_LINE_MIN_MS = 1000;
 constexpr unsigned long GPS_STARTUP_MAX_AGE_MS = 1500;
+constexpr unsigned long GPS_RUNTIME_MAX_AGE_MS = 1500;
+constexpr long GPS_RUNTIME_MAX_DELTA_SECONDS = 10L * 60L;
 constexpr unsigned long DISPLAY_TIMEOUT_MS = 60000;
 constexpr unsigned long MENU_TIMEOUT_MS = 30000;
 constexpr unsigned long SHORT_PRESS_MAX_MS = 2000;
@@ -278,6 +280,8 @@ void startPumpRunMinutes(uint16_t minutes, unsigned long nowMs);
 void stopPumpRun();
 bool performRunup();
 bool gpsTimeSyncAllowed();
+time_t gpsEpochUtc();
+bool runtimeGpsSyncReady();
 void setMode(SystemMode nextMode);
 void stopPumpForSafety(const __FlashStringHelper *message);
 const __FlashStringHelper *modeName(SystemMode mode);
@@ -563,7 +567,7 @@ void consumeGpsData() {
   }
 
   sensors.gpsHasFix = gps.location.isValid() && gps.date.isValid() && gps.time.isValid();
-  if (gpsTimeSyncAllowed() && sensors.gpsHasFix && gps.date.isUpdated() && gps.time.isUpdated()) {
+  if (runtimeGpsSyncReady()) {
     syncClockFromGps();
     refreshSchedule();
   }
@@ -1619,6 +1623,51 @@ bool performRunup() {
 
 bool gpsTimeSyncAllowed() {
   return millis() >= startup.gpsTimeSuppressedUntilMs;
+}
+
+time_t gpsEpochUtc() {
+  if (!gps.date.isValid() || !gps.time.isValid()) {
+    return 0;
+  }
+
+  tmElements_t gpsTm;
+  gpsTm.Second = gps.time.second();
+  gpsTm.Minute = gps.time.minute();
+  gpsTm.Hour = gps.time.hour();
+  gpsTm.Day = gps.date.day();
+  gpsTm.Month = gps.date.month();
+  gpsTm.Year = CalendarYrToTm(gps.date.year());
+  return makeTime(gpsTm);
+}
+
+bool runtimeGpsSyncReady() {
+  if (!gpsTimeSyncAllowed() || !sensors.gpsHasFix || !gps.date.isUpdated() || !gps.time.isUpdated()) {
+    return false;
+  }
+
+  if (!gps.date.isValid() || !gps.time.isValid()) {
+    return false;
+  }
+
+  if (gps.date.age() > GPS_RUNTIME_MAX_AGE_MS || gps.time.age() > GPS_RUNTIME_MAX_AGE_MS) {
+    return false;
+  }
+
+  if (startup.startedAtMs != 0 || timeStatus() == timeNotSet) {
+    return true;
+  }
+
+  const time_t gpsUtc = gpsEpochUtc();
+  if (gpsUtc == 0) {
+    return false;
+  }
+
+  int64_t deltaSeconds = static_cast<int64_t>(gpsUtc) - static_cast<int64_t>(now());
+  if (deltaSeconds < 0) {
+    deltaSeconds = -deltaSeconds;
+  }
+
+  return deltaSeconds <= GPS_RUNTIME_MAX_DELTA_SECONDS;
 }
 
 float readBatteryVoltage() {
