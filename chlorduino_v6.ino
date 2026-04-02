@@ -99,6 +99,7 @@ struct PumpState {
   unsigned long startedAtMs = 0;
   unsigned long targetRunMs = 0;
   unsigned long accumulatedTodayMs = 0;
+  uint32_t accumulatedDayKey = 0;
 };
 
 struct UiState {
@@ -246,7 +247,9 @@ bool sampleTemperatureNow();
 void consumeGpsData();
 void updateNextSunset();
 time_t computeNextDoseEpochUtc(time_t utcNow);
-void refreshSchedule(bool persist);
+void refreshSchedule();
+void rebuildSchedule(bool saveToSettings);
+bool storedScheduleNeedsRebuild(time_t utcNow);
 time_t midnightUtcFor(time_t utc);
 time_t sunsetEpochUtcForDate(time_t dateUtc);
 void updateUi();
@@ -305,6 +308,8 @@ void initializeTemperatureSensor();
 void noteUserActivity(unsigned long nowMs);
 void setDisplayPower(bool enabled);
 time_t localTimeNow();
+uint32_t localDayKeyFor(time_t utc);
+void resetPumpDailyAccumulatorIfNeeded();
 void syncClockFromGps();
 void suppressGpsTimeSync();
 void resetInputState();
@@ -560,12 +565,12 @@ void consumeGpsData() {
   sensors.gpsHasFix = gps.location.isValid() && gps.date.isValid() && gps.time.isValid();
   if (gpsTimeSyncAllowed() && sensors.gpsHasFix && gps.date.isUpdated() && gps.time.isUpdated()) {
     syncClockFromGps();
-    refreshSchedule(true);
+    refreshSchedule();
   }
 }
 
 void updateNextSunset() {
-  refreshSchedule(false);
+  refreshSchedule();
 }
 
 time_t computeNextDoseEpochUtc(time_t utcNow) {
@@ -583,7 +588,29 @@ time_t computeNextDoseEpochUtc(time_t utcNow) {
   return tomorrowSunsetUtc - SECS_PER_HOUR;
 }
 
-void refreshSchedule(bool persist) {
+bool storedScheduleNeedsRebuild(time_t utcNow) {
+  if (timeStatus() == timeNotSet || !sensors.gpsHasFix || !gps.location.isValid()) {
+    return false;
+  }
+
+  const time_t nextDoseUtc = static_cast<time_t>(settings.nextDoseEpochUtc);
+  if (nextDoseUtc == 0) {
+    return true;
+  }
+
+  if (nextDoseUtc > (utcNow + (2UL * SECS_PER_DAY))) {
+    return true;
+  }
+
+  if (settings.lastDoseEpochUtc != 0 &&
+      nextDoseUtc <= static_cast<time_t>(settings.lastDoseEpochUtc)) {
+    return true;
+  }
+
+  return false;
+}
+
+void rebuildSchedule(bool saveToSettings) {
   if (timeStatus() == timeNotSet) {
     sensors.nextSunsetHours = -1.0f;
     sensors.nextPumpRunHours = -1.0f;
@@ -592,38 +619,12 @@ void refreshSchedule(bool persist) {
   }
 
   const time_t utcNow = now();
-
   if (!sensors.gpsHasFix || !gps.location.isValid()) {
-    sensors.nextSunsetHours = -1.0f;
-    sensors.nextDoseEpochUtc = settings.nextDoseEpochUtc;
-    if (sensors.nextDoseEpochUtc != 0 && static_cast<time_t>(sensors.nextDoseEpochUtc) >= utcNow) {
-      sensors.nextPumpRunHours = static_cast<float>(sensors.nextDoseEpochUtc - static_cast<uint32_t>(utcNow)) / 3600.0f;
-    } else {
-      sensors.nextPumpRunHours = -1.0f;
-    }
+    refreshSchedule();
     return;
   }
 
-  time_t nextDoseUtc = static_cast<time_t>(settings.nextDoseEpochUtc);
-  const bool nextDoseMissing = nextDoseUtc == 0;
-  const bool nextDoseBeforeLastDose =
-    settings.lastDoseEpochUtc != 0 &&
-    nextDoseUtc != 0 &&
-    nextDoseUtc <= static_cast<time_t>(settings.lastDoseEpochUtc);
-  const bool nextDoseTooFarInFuture =
-    nextDoseUtc != 0 &&
-    nextDoseUtc > (utcNow + (2UL * SECS_PER_DAY));
-  const bool scheduledDoseAlreadyRan =
-    settings.lastDoseEpochUtc != 0 &&
-    nextDoseUtc != 0 &&
-    static_cast<time_t>(settings.lastDoseEpochUtc) >= nextDoseUtc;
-
-  if (persist || nextDoseMissing || nextDoseBeforeLastDose || nextDoseTooFarInFuture ||
-      (scheduledDoseAlreadyRan && nextDoseUtc <= utcNow)) {
-    nextDoseUtc = computeNextDoseEpochUtc(utcNow);
-    persist = true;
-  }
-
+  const time_t nextDoseUtc = computeNextDoseEpochUtc(utcNow);
   if (nextDoseUtc == 0) {
     sensors.nextSunsetHours = -1.0f;
     sensors.nextPumpRunHours = -1.0f;
@@ -636,10 +637,51 @@ void refreshSchedule(bool persist) {
   sensors.nextPumpRunHours = static_cast<float>(nextDoseUtc - utcNow) / 3600.0f;
   sensors.nextDoseEpochUtc = static_cast<uint32_t>(nextDoseUtc);
 
-  if (persist && settings.nextDoseEpochUtc != sensors.nextDoseEpochUtc) {
+  if (saveToSettings && settings.nextDoseEpochUtc != sensors.nextDoseEpochUtc) {
     settings.nextDoseEpochUtc = sensors.nextDoseEpochUtc;
     savePersistentSettings();
   }
+}
+
+void refreshSchedule() {
+  if (timeStatus() == timeNotSet) {
+    sensors.nextSunsetHours = -1.0f;
+    sensors.nextPumpRunHours = -1.0f;
+    sensors.nextDoseEpochUtc = 0;
+    return;
+  }
+
+  const time_t utcNow = now();
+  if (storedScheduleNeedsRebuild(utcNow)) {
+    rebuildSchedule(true);
+    return;
+  }
+
+  if (!sensors.gpsHasFix || !gps.location.isValid()) {
+    sensors.nextSunsetHours = -1.0f;
+    sensors.nextDoseEpochUtc = settings.nextDoseEpochUtc;
+    if (sensors.nextDoseEpochUtc != 0) {
+      sensors.nextPumpRunHours = static_cast<float>(
+        static_cast<int64_t>(sensors.nextDoseEpochUtc) - static_cast<int64_t>(utcNow)
+      ) / 3600.0f;
+    } else {
+      sensors.nextPumpRunHours = -1.0f;
+    }
+    return;
+  }
+
+  const time_t nextDoseUtc = static_cast<time_t>(settings.nextDoseEpochUtc);
+  if (nextDoseUtc == 0) {
+    sensors.nextSunsetHours = -1.0f;
+    sensors.nextPumpRunHours = -1.0f;
+    sensors.nextDoseEpochUtc = 0;
+    return;
+  }
+
+  const time_t scheduledSunsetUtc = nextDoseUtc + SECS_PER_HOUR;
+  sensors.nextSunsetHours = static_cast<float>(scheduledSunsetUtc - utcNow) / 3600.0f;
+  sensors.nextPumpRunHours = static_cast<float>(nextDoseUtc - utcNow) / 3600.0f;
+  sensors.nextDoseEpochUtc = static_cast<uint32_t>(nextDoseUtc);
 }
 
 void runSafetyChecks(unsigned long nowMs) {
@@ -648,6 +690,7 @@ void runSafetyChecks(unsigned long nowMs) {
   }
 
   lastSafetyCheckMs = nowMs;
+  resetPumpDailyAccumulatorIfNeeded();
 
   if (pump.commandedOn) {
     const unsigned long currentRunMs = nowMs - pump.startedAtMs;
@@ -958,11 +1001,13 @@ void runControlLogic(unsigned long nowMs) {
 
 void applyPumpOutput(unsigned long nowMs) {
   if (pump.commandedOn && !pump.enabled) {
+    resetPumpDailyAccumulatorIfNeeded();
     pump.enabled = true;
     pump.startedAtMs = nowMs;
     digitalWrite(Pins::PUMP_GATE, HIGH);
     Serial.println(F("Pump ON"));
   } else if (!pump.commandedOn && pump.enabled) {
+    resetPumpDailyAccumulatorIfNeeded();
     pump.enabled = false;
     pump.accumulatedTodayMs += (nowMs - pump.startedAtMs);
     digitalWrite(Pins::PUMP_GATE, LOW);
@@ -1154,7 +1199,7 @@ void processSerialCommand(const char *command) {
     setTime(hh, mm, 0, currentDay, currentMonth, currentYear);
     adjustTime(-static_cast<long>(settings.utcOffsetHours) * SECS_PER_HOUR);
     suppressGpsTimeSync();
-    refreshSchedule(true);
+    rebuildSchedule(true);
 
     Serial.print(F("Local time set to "));
     if (hh < 10) {
@@ -1182,7 +1227,7 @@ void processSerialCommand(const char *command) {
 
     setTime(currentHour, currentMinute, currentSecond, dd, monthValue, yyyy);
     suppressGpsTimeSync();
-    refreshSchedule(true);
+    rebuildSchedule(true);
 
     Serial.print(F("UTC date set to "));
     Serial.print(yyyy);
@@ -1504,6 +1549,7 @@ time_t sunsetEpochUtcForDate(time_t dateUtc) {
 
 void startPumpRunMinutes(uint16_t minutes, unsigned long nowMs) {
   ui.screen = SCREEN_IDLE;
+  resetPumpDailyAccumulatorIfNeeded();
   pump.targetRunMs = static_cast<unsigned long>(minutes) * 60UL * 1000UL;
   pump.commandedOn = true;
   pump.keepDisplayOn = ui.displayOn;
@@ -1511,7 +1557,7 @@ void startPumpRunMinutes(uint16_t minutes, unsigned long nowMs) {
   pump.startedAtMs = nowMs;
   settings.lastDoseEpochUtc = static_cast<uint32_t>(now());
   savePersistentSettings();
-  refreshSchedule(true);
+  rebuildSchedule(true);
   setMode(MODE_DOSING);
 }
 
@@ -1792,7 +1838,7 @@ void waitForGpsStartupLock() {
 
   sensors.gpsHasFix = true;
   syncClockFromGps();
-  refreshSchedule(true);
+  rebuildSchedule(true);
   startupLogLine("GPS lock acquired");
 
   if (Serial) {
@@ -2295,6 +2341,31 @@ void waitForStartupLineDwell() {
 
 time_t localTimeNow() {
   return now() + (static_cast<long>(settings.utcOffsetHours) * SECS_PER_HOUR);
+}
+
+uint32_t localDayKeyFor(time_t utc) {
+  const time_t localEpoch =
+    utc + (static_cast<long>(settings.utcOffsetHours) * SECS_PER_HOUR);
+  tmElements_t localTm;
+  breakTime(localEpoch, localTm);
+
+  return (static_cast<uint32_t>(tmYearToCalendar(localTm.Year)) * 10000UL) +
+         (static_cast<uint32_t>(localTm.Month) * 100UL) +
+         static_cast<uint32_t>(localTm.Day);
+}
+
+void resetPumpDailyAccumulatorIfNeeded() {
+  if (timeStatus() == timeNotSet) {
+    return;
+  }
+
+  const uint32_t todayKey = localDayKeyFor(now());
+  if (pump.accumulatedDayKey == todayKey) {
+    return;
+  }
+
+  pump.accumulatedDayKey = todayKey;
+  pump.accumulatedTodayMs = 0;
 }
 
 InputMode currentInputMode() {
