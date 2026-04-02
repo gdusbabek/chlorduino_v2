@@ -226,6 +226,8 @@ uint8_t batteryHistoryCount = 0;
 uint8_t batteryHistoryIndex = 0;
 
 constexpr uint8_t MENU_ITEM_COUNT = 9;
+constexpr uint8_t SYSTEM_SCREEN_LINE_COUNT = 10;
+constexpr uint8_t SYSTEM_SCREEN_VISIBLE_ROWS = 5;
 const char *const MENU_ITEMS[MENU_ITEM_COUNT] = {
   "duration",
   "utc",
@@ -277,6 +279,8 @@ void formatLastDoseText(char *buffer, size_t size, const char *prefix);
 uint32_t liveNextDoseEpochUtc();
 void formatDoseEpochText(char *buffer, size_t size, const char *prefix, uint32_t epochUtc);
 void formatNextDoseText(char *buffer, size_t size, const char *prefix);
+void formatNowText(char *buffer, size_t size, const char *prefix);
+void formatDoseDeltaText(char *buffer, size_t size, const char *prefix, uint32_t epochUtc);
 void startPumpRunMinutes(uint16_t minutes, unsigned long nowMs);
 void stopPumpRun();
 bool performRunup();
@@ -286,6 +290,7 @@ bool runtimeGpsSyncReady();
 void setMode(SystemMode nextMode);
 void stopPumpForSafety(const __FlashStringHelper *message);
 const __FlashStringHelper *modeName(SystemMode mode);
+const char *modeText(SystemMode mode);
 RestartReason detectRestartReason(uint8_t &rawCause);
 const __FlashStringHelper *restartReasonName(RestartReason reason);
 void initializeStartup();
@@ -1000,7 +1005,7 @@ void runControlLogic(unsigned long nowMs) {
     if (eventUp && ui.systemScroll > 0) {
       ui.systemScroll--;
     }
-    if (eventDown && ui.systemScroll < 3) {
+    if (eventDown && ui.systemScroll < (SYSTEM_SCREEN_LINE_COUNT - SYSTEM_SCREEN_VISIBLE_ROWS)) {
       ui.systemScroll++;
     }
     if (eventSelect) {
@@ -1548,6 +1553,60 @@ void formatNextDoseText(char *buffer, size_t size, const char *prefix) {
   formatDoseEpochText(buffer, size, prefix, liveNextDoseEpochUtc());
 }
 
+void formatNowText(char *buffer, size_t size, const char *prefix) {
+  if (timeStatus() == timeNotSet) {
+    snprintf(buffer, size, "%sUNKNOWN", prefix);
+    return;
+  }
+
+  const time_t localNow = localTimeNow();
+  tmElements_t nowTm;
+  breakTime(localNow, nowTm);
+
+  snprintf(
+    buffer,
+    size,
+    "%s%02d %s %02d:%02d",
+    prefix,
+    nowTm.Day,
+    monthAbbrev(nowTm.Month),
+    nowTm.Hour,
+    nowTm.Minute
+  );
+}
+
+void formatDoseDeltaText(char *buffer, size_t size, const char *prefix, uint32_t epochUtc) {
+  if (timeStatus() == timeNotSet || epochUtc == 0) {
+    snprintf(buffer, size, "%sUNKNOWN", prefix);
+    return;
+  }
+
+  const int64_t deltaSeconds =
+    static_cast<int64_t>(epochUtc) - static_cast<int64_t>(now());
+
+  if (deltaSeconds >= 0) {
+    if (deltaSeconds < 3600) {
+      const unsigned long minutes = static_cast<unsigned long>((deltaSeconds + 59) / 60);
+      snprintf(buffer, size, "%sin %lum", prefix, minutes);
+    } else {
+      const unsigned long hours = static_cast<unsigned long>(deltaSeconds / 3600);
+      const unsigned long minutes = static_cast<unsigned long>((deltaSeconds % 3600) / 60);
+      snprintf(buffer, size, "%sin %luh%02lum", prefix, hours, minutes);
+    }
+    return;
+  }
+
+  const unsigned long lateSeconds = static_cast<unsigned long>(-deltaSeconds);
+  if (lateSeconds < 3600UL) {
+    const unsigned long minutes = (lateSeconds + 59UL) / 60UL;
+    snprintf(buffer, size, "%slate %lum", prefix, minutes);
+  } else {
+    const unsigned long hours = lateSeconds / 3600UL;
+    const unsigned long minutes = (lateSeconds % 3600UL) / 60UL;
+    snprintf(buffer, size, "%slate %luh%02lum", prefix, hours, minutes);
+  }
+}
+
 time_t midnightUtcFor(time_t utc) {
   tmElements_t utcTm;
   breakTime(utc, utcTm);
@@ -1743,6 +1802,21 @@ const __FlashStringHelper *modeName(SystemMode mode) {
       return F("LOW_BATTERY");
     default:
       return F("UNKNOWN");
+  }
+}
+
+const char *modeText(SystemMode mode) {
+  switch (mode) {
+    case MODE_BOOT:
+      return "BOOT";
+    case MODE_IDLE:
+      return "IDLE";
+    case MODE_DOSING:
+      return "DOSING";
+    case MODE_LOW_BATTERY:
+      return "LOW_BATTERY";
+    default:
+      return "UNKNOWN";
   }
 }
 
@@ -2339,25 +2413,32 @@ void renderManualScreen() {
 }
 
 void renderSystemScreen() {
-  char lines[8][24];
+  char lines[SYSTEM_SCREEN_LINE_COUNT][24];
   oled.clearBuffer();
   oled.setFont(u8g2_font_6x10_tr);
 
   oled.drawStr(0, 8, "System");
 
-  snprintf(lines[0], sizeof(lines[0]), "Boots: %lu", static_cast<unsigned long>(settings.restartCount));
-  snprintf(lines[1], sizeof(lines[1]), "Crashes: %lu", static_cast<unsigned long>(settings.crashCount));
-  snprintf(lines[2], sizeof(lines[2]), "Reset: %s", restartReasonText(startup.restartReason));
-  snprintf(lines[3], sizeof(lines[3]), "Input: %s", inputModeText(currentInputMode()));
-  formatLastDoseText(lines[4], sizeof(lines[4]), "Dose: ");
-  formatNextDoseText(lines[5], sizeof(lines[5]), "Next: ");
-  formatDoseEpochText(lines[6], sizeof(lines[6]), "Saved: ", settings.nextDoseEpochUtc);
-  snprintf(lines[7], sizeof(lines[7]), "GPS:%s WDT:%ds", sensors.gpsHasFix ? "yes" : "no", watchdogTimeoutMs / 1000);
+  formatNowText(lines[0], sizeof(lines[0]), "Now: ");
+  snprintf(lines[1], sizeof(lines[1]), "Mode: %s", modeText(systemMode));
+  formatLastDoseText(lines[2], sizeof(lines[2]), "Last: ");
+  formatNextDoseText(lines[3], sizeof(lines[3]), "Next: ");
+  formatDoseEpochText(lines[4], sizeof(lines[4]), "Saved: ", settings.nextDoseEpochUtc);
+  formatDoseDeltaText(lines[5], sizeof(lines[5]), "Due: ", liveNextDoseEpochUtc());
+  snprintf(
+    lines[6],
+    sizeof(lines[6]),
+    "GPS:%s Sat:%lu",
+    sensors.gpsHasFix ? "yes" : "no",
+    gps.satellites.isValid() ? static_cast<unsigned long>(gps.satellites.value()) : 0UL
+  );
+  snprintf(lines[7], sizeof(lines[7]), "UTC:%+d Run:%umin", settings.utcOffsetHours, settings.runDurationMinutes);
+  snprintf(lines[8], sizeof(lines[8]), "Boots:%lu Crash:%lu", static_cast<unsigned long>(settings.restartCount), static_cast<unsigned long>(settings.crashCount));
+  snprintf(lines[9], sizeof(lines[9]), "Reset:%s", restartReasonText(startup.restartReason));
 
-  const uint8_t visibleRows = 5;
-  for (uint8_t row = 0; row < visibleRows; ++row) {
+  for (uint8_t row = 0; row < SYSTEM_SCREEN_VISIBLE_ROWS; ++row) {
     const uint8_t lineIndex = ui.systemScroll + row;
-    if (lineIndex >= 8) {
+    if (lineIndex >= SYSTEM_SCREEN_LINE_COUNT) {
       break;
     }
 
