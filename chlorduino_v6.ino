@@ -751,14 +751,29 @@ void runControlLogic(unsigned long nowMs) {
     }
   }
 
-  if (!ui.displayOn) {
-    if (systemMode == MODE_DOSING && inputEvents.anyActivity) {
-      setDisplayPower(true);
-      pump.keepDisplayOn = true;
-      noteUserActivity(nowMs);
+  if (systemMode == MODE_DOSING) {
+    pump.commandedOn = true;
+    if ((nowMs - pump.startedAtMs) >= pump.targetRunMs) {
+      pump.commandedOn = false;
+      setMode(MODE_IDLE);
+    }
+
+    if (!ui.displayOn) {
+      if (inputEvents.anyActivity) {
+        setDisplayPower(true);
+        pump.keepDisplayOn = true;
+        noteUserActivity(nowMs);
+      }
       return;
     }
 
+    if (inputEvents.anyActivity) {
+      noteUserActivity(nowMs);
+    }
+    return;
+  }
+
+  if (!ui.displayOn) {
     if (eventSelect) {
       setDisplayPower(true);
       noteUserActivity(nowMs);
@@ -1010,15 +1025,6 @@ void runControlLogic(unsigned long nowMs) {
     }
     if (eventSelect) {
       ui.screen = SCREEN_MENU;
-    }
-    return;
-  }
-
-  if (systemMode == MODE_DOSING) {
-    pump.commandedOn = true;
-    if ((nowMs - pump.startedAtMs) >= pump.targetRunMs) {
-      pump.commandedOn = false;
-      setMode(MODE_IDLE);
     }
     return;
   }
