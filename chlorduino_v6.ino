@@ -87,6 +87,7 @@ struct SensorState {
   uint32_t nextDoseEpochUtc = 0;
   bool gpsHasFix = false;
   bool tempValid = false;
+  bool tempPollingEnabled = true;
   bool batteryValid = false;
   uint8_t tempSensorCount = 0;
 };
@@ -177,6 +178,7 @@ constexpr unsigned long DISPLAY_TIMEOUT_MS = 60000;
 constexpr unsigned long MENU_TIMEOUT_MS = 30000;
 constexpr unsigned long SHORT_PRESS_MAX_MS = 2000;
 constexpr unsigned long TEMP_STARTUP_RETRY_MS = 1000;
+constexpr unsigned long TEMP_STARTUP_TIMEOUT_MS = 5UL * 1000UL;
 constexpr unsigned long STARTUP_TIMEOUT_MS = 5UL * 60UL * 1000UL;
 constexpr unsigned long GPS_MANUAL_TIME_HOLDOFF_MS = 2UL * 60UL * 60UL * 1000UL;
 constexpr long SCHEDULED_DOSE_GRACE_SECONDS = 5L * 60L;
@@ -533,6 +535,10 @@ void updateBattery(unsigned long nowMs) {
 }
 
 void updateTemperature(unsigned long nowMs) {
+  if (!sensors.tempPollingEnabled) {
+    return;
+  }
+
   const unsigned long tempIntervalMs = ui.displayOn ? TEMP_INTERVAL_DISPLAY_ON_MS : TEMP_INTERVAL_DISPLAY_OFF_MS;
   if (nowMs - lastTempReadMs < tempIntervalMs) {
     return;
@@ -553,6 +559,10 @@ void updateGps(unsigned long nowMs) {
 }
 
 bool sampleTemperatureNow() {
+  if (!sensors.tempPollingEnabled) {
+    return false;
+  }
+
   waterTempSensor.requestTemperatures();
 
   const float tempC = waterTempSensor.getTempCByIndex(0);
@@ -1367,7 +1377,7 @@ void printState() {
     Serial.print(static_cast<int>(roundf(sensors.waterTempF)));
     Serial.print(F("F"));
   } else {
-    Serial.print(F("--"));
+    Serial.print(F("??"));
   }
   Serial.print(F(" Battery="));
   Serial.print(sensors.batteryVolts, 2);
@@ -2062,6 +2072,7 @@ void waitForTemperatureStartupLock() {
 
     const bool tempReady = temperatureStartupLockAcquired();
     const bool minSpinnerElapsed = (nowMs - startedAtMs) >= MIN_TEMP_SPINNER_MS;
+    const bool tempTimedOut = (nowMs - startedAtMs) >= TEMP_STARTUP_TIMEOUT_MS;
 
     if (Serial && (nowMs - lastStatusPrintMs) >= 1000) {
       lastStatusPrintMs = nowMs;
@@ -2087,16 +2098,23 @@ void waitForTemperatureStartupLock() {
       break;
     }
 
+    if (tempTimedOut) {
+      sensors.tempPollingEnabled = false;
+      sensors.tempValid = false;
+      sensors.waterTempF = NAN;
+      break;
+    }
+
     delay(20);
   }
 
-  startupLogLine("Temp acquired");
+  startupLogLine(sensors.tempValid ? "Temp acquired" : "Temp unavailable");
 
   char line[STARTUP_LINE_CHARS + 1];
   if (sensors.tempValid) {
     snprintf(line, sizeof(line), "Temp: %d F", static_cast<int>(roundf(sensors.waterTempF)));
   } else {
-    snprintf(line, sizeof(line), "Temp: unavailable");
+    snprintf(line, sizeof(line), "Temp: ??");
   }
   startupLogLine(line);
   renderStartupScreen(nullptr);
@@ -2128,6 +2146,7 @@ void initializeDisplay() {
 void initializeTemperatureSensor() {
   waterTempSensor.begin();
   waterTempSensor.setWaitForConversion(true);
+  sensors.tempPollingEnabled = true;
   sensors.tempSensorCount = static_cast<uint8_t>(waterTempSensor.getDeviceCount());
 
   if (sensors.tempSensorCount > 0) {
@@ -2195,13 +2214,13 @@ void renderIdleScreen() {
     if (sensors.tempValid) {
       snprintf(line, sizeof(line), "%dF", static_cast<int>(roundf(sensors.waterTempF)));
     } else {
-      snprintf(line, sizeof(line), "--F");
+      snprintf(line, sizeof(line), "??");
     }
     oled.drawStr(104, 10, line);
   } else {
     oled.drawStr(0, 10, "--:--:--");
     oled.drawStr(59, 10, "-- ---");
-    oled.drawStr(104, 10, "--F");
+    oled.drawStr(104, 10, "??");
   }
 
   snprintf(
